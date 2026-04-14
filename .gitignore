@@ -30,6 +30,11 @@ backend/build/
 backend/dist/
 backend/*.spec
 
+# Optional local MeCab/UniDic dictionaries (large, re-downloadable)
+backend/data/unidic_lite/
+backend/data/mecab_dic/
+backend/data/dicdir/
+
 # Local env files
 .env
 .env.*
