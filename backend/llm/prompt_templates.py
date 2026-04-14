@@ -1,39 +1,49 @@
 """Prompt templates for LLM-based deep grammar analysis."""
 
 ANALYSIS_PROMPT = """\
-あなたは日本語文法の専門家です。以下の日本語文を詳細に分析し、JSON形式で結果を返してください。
+你是日语语法讲解专家。请分析下面的日语句子，并严格返回一个可被 json.loads 解析的 JSON 对象。
 
-## 分析対象
-「{text}」
+分析目标：
+{text}
 
-## 出力要件（必ずJSONで返答）
+硬性要求：
+1. 只输出 JSON，不要 Markdown 代码块，不要任何额外文本。
+2. JSON 必须合法：
+   - 不能有尾随逗号
+   - 不能有注释
+   - 字符串中的双引号必须转义
+3. 以下字段的说明必须使用简体中文：
+   function, comparison, role, note, category, score, problem, cultural_context, applications
+4. 以下字段保留日文内容：
+   grammar, fragment, expression, wrong, correct, example
+5. level 只能使用 N1/N2/N3/N4/N5 之一。
 
-```json
+输出 JSON 结构（字段名必须完全一致）：
 {{
   "core_grammar": [
     {{
-      "grammar": "語法名称",
-      "structure": "接续结构",
-      "function": "功能说明（中文）",
-      "comparison": "与相似语法的对比（中文）",
-      "level": "N1-N5"
+      "grammar": "语法点（日文）",
+      "structure": "接续结构（可中日混合）",
+      "function": "功能说明（简体中文）",
+      "comparison": "与近义语法对比（简体中文）",
+      "level": "N1"
     }}
   ],
   "sentence_breakdown": [
     {{
-      "fragment": "原文片段",
-      "role": "语法功能（如：程度限定、主语、条件接续等）",
-      "reading": "读音"
+      "fragment": "原文片段（日文）",
+      "role": "语法角色（简体中文）",
+      "reading": "假名读音"
     }}
   ],
   "grammar_tree": [
     {{
-      "label": "层级名称（如：轻微条件）",
-      "note": "说明",
+      "label": "节点名称",
+      "note": "说明（简体中文）",
       "children": [
         {{
           "label": "子节点",
-          "note": "说明",
+          "note": "说明（简体中文）",
           "children": []
         }}
       ]
@@ -41,48 +51,36 @@ ANALYSIS_PROMPT = """\
   ],
   "comparisons": [
     {{
-      "category": "对比类别（如：条件表达差异）",
+      "category": "对比类别（简体中文）",
       "items": [
         {{
-          "expression": "表达形式",
-          "example": "例句",
-          "score": "特征评分或程度描述",
-          "note": "补充说明"
+          "expression": "表达（日文）",
+          "example": "例句（日文）",
+          "score": "特征说明（简体中文）",
+          "note": "补充（简体中文）"
         }}
       ]
     }}
   ],
   "common_mistakes": [
     {{
-      "wrong": "错误表达",
-      "problem": "问题点",
-      "correct": "正确形式"
+      "wrong": "错误表达（日文）",
+      "problem": "问题说明（简体中文）",
+      "correct": "正确表达（日文）"
     }}
   ],
-  "cultural_context": "文化语境说明（中文，可选）",
-  "applications": ["应用场景1: 例句", "应用场景2: 例句"],
+  "cultural_context": "文化语境说明（简体中文）",
+  "applications": ["应用场景1（简体中文）", "应用场景2（简体中文）"],
   "level_annotations": [
     {{
       "start": 0,
       "end": 3,
       "level": "N4",
-      "grammar": "对应的语法点"
+      "grammar": "语法点（日文）"
     }}
   ]
 }}
-```
-
-## 分析要求
-1. **核心语法解析**: 找出句中所有语法点，标注 N1-N5 等级，给出结构、功能、对比
-2. **句子结构分解**: 将句子拆分为功能组件，标注每个片段的语法角色
-3. **语法层级关系**: 用树形结构展示语法之间的层级和依赖关系
-4. **近义表达对比**: 至少列出两组近义表达对比，含例句和特征评分
-5. **常见错误**: 列出学习者对这些语法点的常见误用
-6. **文化语境**: 说明该表达的使用场景和文化含义
-7. **应用拓展**: 给出2-3个不同场景下的改编例句
-8. **语法等级标注**: 对原文中每个语法点标注字符位置(start/end)和JLPT等级
-
-只返回JSON，不要额外解释。"""
+"""
 
 
 def build_analysis_prompt(text: str) -> str:

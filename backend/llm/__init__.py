@@ -12,7 +12,10 @@ from __future__ import annotations
 import logging
 import os
 
-from backend.storage.settings_store import load_env_from_db
+try:
+    from backend.storage.settings_store import load_env_from_db
+except ModuleNotFoundError:
+    from storage.settings_store import load_env_from_db
 
 logger = logging.getLogger(__name__)
 

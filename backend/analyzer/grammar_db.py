@@ -15,6 +15,11 @@ import os
 import re
 import threading
 
+try:
+    from backend.storage.grammar_store import load_learned_grammar, upsert_learned_grammar
+except ModuleNotFoundError:
+    from storage.grammar_store import load_learned_grammar, upsert_learned_grammar
+
 from .models import GrammarMatch, Token
 
 logger = logging.getLogger(__name__)
@@ -22,11 +27,76 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 _GRAMMAR_FILE = os.path.join(_DATA_DIR, "jlpt_grammar.json")
 
-# In-memory grammar DB (loaded once, grows via learning)
+# In-memory grammar DB (loaded once; seed JSON + learned entries from SQLite)
 _grammar_db: list[dict] = []
 _known_patterns: set[str] = set()
+_known_pattern_keys: set[str] = set()
 _lock = threading.Lock()
 _loaded = False
+
+_VALID_LEVELS = {"N1", "N2", "N3", "N4", "N5"}
+
+
+def _auto_learn_enabled() -> bool:
+    return os.environ.get("JP_TOOL_GRAMMAR_AUTO_LEARN", "on").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
+
+
+def _pattern_key(pattern: str) -> str:
+    """Normalize grammar pattern for duplicate checks."""
+    return re.sub(r"\s+", "", (pattern or "")).strip().lower()
+
+
+def _merge_entry(base: dict, incoming: dict) -> dict:
+    """Merge duplicate entries, preferring non-auto-learned and non-empty fields."""
+    winner = dict(base)
+
+    base_auto = bool(base.get("auto_learned", False))
+    incoming_auto = bool(incoming.get("auto_learned", False))
+    if base_auto and not incoming_auto:
+        winner = dict(incoming)
+    else:
+        for key in ("level", "meaning_zh", "meaning_ja", "example", "token_pattern"):
+            if not winner.get(key) and incoming.get(key):
+                winner[key] = incoming[key]
+
+    base_regexes = base.get("regexes", []) if isinstance(base.get("regexes"), list) else []
+    in_regexes = incoming.get("regexes", []) if isinstance(incoming.get("regexes"), list) else []
+    merged_regexes: list[str] = []
+    seen: set[str] = set()
+    for regex in [*base_regexes, *in_regexes]:
+        r = str(regex)
+        if r not in seen:
+            seen.add(r)
+            merged_regexes.append(r)
+    if merged_regexes:
+        winner["regexes"] = merged_regexes
+
+    return winner
+
+
+def _deduplicate_db(entries: list[dict]) -> list[dict]:
+    """Deduplicate grammar DB entries by normalized pattern key."""
+    unique: list[dict] = []
+    index_by_key: dict[str, int] = {}
+    for entry in entries:
+        pattern = str(entry.get("pattern", ""))
+        key = _pattern_key(pattern)
+        if not key:
+            continue
+
+        if key in index_by_key:
+            idx = index_by_key[key]
+            unique[idx] = _merge_entry(unique[idx], entry)
+            continue
+
+        index_by_key[key] = len(unique)
+        unique.append(entry)
+    return unique
 
 
 def _ensure_loaded():
@@ -42,33 +112,89 @@ def _ensure_loaded():
 
 
 def _load_from_disk():
-    """Load grammar DB from JSON file."""
-    global _grammar_db, _known_patterns
-    if not os.path.exists(_GRAMMAR_FILE):
-        logger.warning("Grammar DB not found at %s, starting empty", _GRAMMAR_FILE)
-        _grammar_db = []
-        _known_patterns = set()
-        return
+    """Load grammar DB from seed JSON + learned SQLite entries."""
+    global _grammar_db, _known_patterns, _known_pattern_keys
+
+    seed_entries: list[dict] = []
+    learned_entries: list[dict] = []
+
     try:
-        with open(_GRAMMAR_FILE, encoding="utf-8") as f:
-            _grammar_db = json.load(f)
+        loaded = []
+        if os.path.exists(_GRAMMAR_FILE):
+            with open(_GRAMMAR_FILE, encoding="utf-8") as f:
+                loaded = json.load(f)
+        else:
+            logger.info("Grammar seed JSON not found at %s, starting without seed entries", _GRAMMAR_FILE)
+
+        if not isinstance(loaded, list):
+            loaded = []
+
+        # Keep JSON as a curated seed file only; strip any historical auto_learned entries.
+        seed_entries = [e for e in loaded if isinstance(e, dict) and not e.get("auto_learned")]
+        seed_entries = _deduplicate_db(seed_entries)
+
+        if len(seed_entries) != len(loaded):
+            logger.info("Sanitized seed grammar JSON: %d -> %d", len(loaded), len(seed_entries))
+            _save_seed_to_disk(seed_entries)
+
+        learned_entries = _deduplicate_db(load_learned_grammar())
+
+        _grammar_db = _deduplicate_db([*seed_entries, *learned_entries])
         _known_patterns = {e.get("pattern", "") for e in _grammar_db}
-        logger.info("Loaded %d grammar patterns from DB", len(_grammar_db))
+        _known_pattern_keys = {_pattern_key(e.get("pattern", "")) for e in _grammar_db if e.get("pattern")}
+
+        logger.info(
+            "Loaded grammar patterns: total=%d (seed=%d, learned=%d)",
+            len(_grammar_db),
+            len(seed_entries),
+            len(learned_entries),
+        )
     except Exception as e:
         logger.error("Failed to load grammar DB: %s", e)
         _grammar_db = []
         _known_patterns = set()
+        _known_pattern_keys = set()
 
 
-def _save_to_disk():
-    """Persist current grammar DB to JSON file."""
+def _save_seed_to_disk(entries: list[dict]):
+    """Persist only seed grammar entries to JSON file."""
     try:
+        seed_entries = [e for e in entries if isinstance(e, dict) and not e.get("auto_learned")]
+        seed_entries = _deduplicate_db(seed_entries)
         os.makedirs(_DATA_DIR, exist_ok=True)
         with open(_GRAMMAR_FILE, "w", encoding="utf-8") as f:
-            json.dump(_grammar_db, f, ensure_ascii=False, indent=2)
-        logger.info("Saved %d grammar patterns to DB", len(_grammar_db))
+            json.dump(seed_entries, f, ensure_ascii=False, indent=2)
+        logger.info("Saved %d seed grammar patterns to JSON", len(seed_entries))
     except Exception as e:
-        logger.error("Failed to save grammar DB: %s", e)
+        logger.error("Failed to save seed grammar DB: %s", e)
+
+
+def _clean_pattern_text(pattern: str) -> str:
+    p = (pattern or "").strip()
+    p = re.sub(r"[（(].*?[）)]", "", p).strip()
+    return p
+
+
+def _looks_like_japanese_text(text: str) -> bool:
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u9fff々]", text or ""))
+
+
+def _valid_level(level: str) -> bool:
+    return (level or "").strip().upper() in _VALID_LEVELS
+
+
+def _is_reasonable_auto_pattern(pattern: str, source_text: str) -> bool:
+    p = _clean_pattern_text(pattern)
+    if not p or len(p) > 40:
+        return False
+    if re.search(r"\s", p):
+        return False
+    if not _looks_like_japanese_text(p):
+        return False
+    # Require some grounding in original sentence to avoid hallucinated meta labels.
+    if p not in (source_text or "") and (pattern or "") not in (source_text or ""):
+        return False
+    return True
 
 
 # ── Pattern matching (Phase 1) ───────────────────────────────────────────────
@@ -160,55 +286,84 @@ def learn_from_deep_result(deep_result) -> int:
     Returns the number of new patterns learned.
     """
     _ensure_loaded()
+
+    if not _auto_learn_enabled():
+        logger.debug("Grammar auto-learn disabled (JP_TOOL_GRAMMAR_AUTO_LEARN=off)")
+        return 0
+
     learned = 0
 
     # Learn from core_grammar entries
     for gp in deep_result.core_grammar:
-        if not gp.grammar or gp.grammar in _known_patterns:
+        pattern = (gp.grammar or "").strip()
+        key = _pattern_key(pattern)
+        if not pattern or not key:
+            continue
+        if key in _known_pattern_keys:
+            continue
+        if not _valid_level(gp.level):
+            continue
+        if not _is_reasonable_auto_pattern(pattern, deep_result.text):
             continue
 
         # Build a regex from the grammar pattern name
         # Use the grammar name itself as a simple regex, escaped
         entry = {
-            "pattern": gp.grammar,
-            "level": gp.level or "",
+            "pattern": pattern,
+            "level": (gp.level or "").upper(),
             "meaning_zh": gp.function or "",
             "meaning_ja": "",
             "example": "",
-            "regexes": [re.escape(gp.grammar)],
+            "regexes": [re.escape(pattern)],
             "auto_learned": True,
         }
 
         with _lock:
+            if key in _known_pattern_keys:
+                continue
+            if not upsert_learned_grammar(entry):
+                continue
             _grammar_db.append(entry)
-            _known_patterns.add(gp.grammar)
+            _known_patterns.add(pattern)
+            _known_pattern_keys.add(key)
         learned += 1
-        logger.info("Learned new grammar: %s (%s)", gp.grammar, gp.level)
+        logger.info("Learned new grammar: %s (%s)", pattern, entry["level"])
 
     # Learn from level_annotations (more precise — has actual text spans)
     for ann in deep_result.level_annotations:
-        if not ann.grammar or ann.grammar in _known_patterns:
+        pattern = (ann.grammar or "").strip()
+        key = _pattern_key(pattern)
+        if not pattern or not key:
+            continue
+        if key in _known_pattern_keys:
+            continue
+        if not _valid_level(ann.level):
+            continue
+        if not _is_reasonable_auto_pattern(pattern, deep_result.text):
             continue
 
         entry = {
-            "pattern": ann.grammar,
-            "level": ann.level or "",
+            "pattern": pattern,
+            "level": (ann.level or "").upper(),
             "meaning_zh": "",
             "meaning_ja": "",
             "example": deep_result.text,
-            "regexes": [re.escape(ann.grammar)],
+            "regexes": [re.escape(pattern)],
             "auto_learned": True,
         }
 
         with _lock:
+            if key in _known_pattern_keys:
+                continue
+            if not upsert_learned_grammar(entry):
+                continue
             _grammar_db.append(entry)
-            _known_patterns.add(ann.grammar)
+            _known_patterns.add(pattern)
+            _known_pattern_keys.add(key)
         learned += 1
-        logger.info("Learned new grammar (annotation): %s (%s)", ann.grammar, ann.level)
+        logger.info("Learned new grammar (annotation): %s (%s)", pattern, entry["level"])
 
-    # Persist to disk if we learned anything
-    if learned > 0:
-        _save_to_disk()
+    # Learned entries are persisted in SQLite by upsert_learned_grammar().
 
     return learned
 

@@ -12,6 +12,7 @@ _LOCK = threading.Lock()
 
 DEFAULT_SETTINGS = {
     "JP_TOOL_LLM": "auto",
+    "JP_TOOL_GRAMMAR_AUTO_LEARN": "on",
     "OLLAMA_MODEL": "qwen2.5:7b",
     "OLLAMA_URL": "http://localhost:11434",
     "API_FORMAT": "openai",
@@ -21,6 +22,7 @@ DEFAULT_SETTINGS = {
     "API_TIMEOUT": "30",
     "JP_TOOL_CLIPBOARD": "on",
     "SHORTCUT_TOGGLE_CLIPBOARD": "ctrl+shift+b",
+    "SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN": "ctrl+shift+g",
     "SHORTCUT_SUBMIT_ANALYZE": "ctrl+enter",
     "SHORTCUT_FOCUS_INPUT": "ctrl+l",
 }

@@ -40,25 +40,92 @@ class BaseLLMProvider(ABC):
 
         Handles common LLM output issues:
         - Markdown code blocks wrapping JSON
-        - Trailing commas
-        - Comments in JSON
-        - Partial/truncated JSON
+        - Full-width punctuation mixed into JSON delimiters
+        - Missing commas and trailing commas
+        - Extra explanatory text before/after JSON
         """
-        json_str = self._extract_json(raw)
+        candidates = self._build_parse_candidates(raw)
+
+        last_error: Exception | None = None
+        for candidate in candidates:
+            try:
+                data = self._try_parse_json(candidate)
+                if isinstance(data, dict):
+                    return self._build_result(text, data)
+            except Exception as e:
+                last_error = e
+
+        if last_error:
+            logger.warning("Failed to parse LLM JSON: %s", last_error)
+        else:
+            logger.warning("Failed to parse LLM JSON: no valid JSON object found")
+
+        logger.debug("Raw response preview: %s", raw[:500])
+        return DeepResult(
+            text=text,
+            cultural_context="LLM返回内容不是有效JSON，已保留原始文本片段。\n" + raw[:500],
+        )
+
+    def _build_parse_candidates(self, raw: str) -> list[str]:
+        extracted = self._extract_json(raw)
+        sources = [extracted, raw]
+        variants: list[str] = []
+
+        for source in sources:
+            if not source:
+                continue
+            s = source.strip()
+            if not s:
+                continue
+
+            normalized = self._normalize_json_text(s)
+            trimmed = self._trim_to_json_object(normalized)
+
+            variants.extend(
+                [
+                    s,
+                    self._fix_json(s),
+                    normalized,
+                    self._fix_json(normalized),
+                    trimmed,
+                    self._fix_json(trimmed),
+                ]
+            )
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in variants:
+            t = item.strip()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            deduped.append(t)
+        return deduped
+
+    def _try_parse_json(self, s: str) -> dict | None:
+        s = s.strip()
+        if not s:
+            return None
 
         try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            # Try fixing common issues
-            fixed = self._fix_json(json_str)
-            try:
-                data = json.loads(fixed)
-            except json.JSONDecodeError as e:
-                logger.warning("Failed to parse LLM JSON: %s", e)
-                logger.debug("Raw response: %s", raw[:300])
-                return DeepResult(text=text, cultural_context=raw[:500])
+            obj = json.loads(s)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
 
-        return self._build_result(text, data)
+        decoder = json.JSONDecoder()
+        start = s.find("{")
+        while start >= 0:
+            try:
+                obj, _ = decoder.raw_decode(s[start:])
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
+            start = s.find("{", start + 1)
+
+        return None
 
     def _extract_json(self, raw: str) -> str:
         """Extract JSON from LLM response, handling code blocks."""
@@ -85,9 +152,68 @@ class BaseLLMProvider(ABC):
         s = re.sub(r",\s*([}\]])", r"\1", s)
         # Remove single-line comments
         s = re.sub(r"//.*$", "", s, flags=re.MULTILINE)
+        # If full stop is mistakenly used as separator, convert to comma.
+        s = s.replace('".。', '",')
+        s = s.replace('".，', '",')
+        s = re.sub(r'"\s*[。．]\s*(?=\s*")', '", ', s)
+        s = re.sub(r'"\s*[。．]\s*(?=\s*[}\]])', '"', s)
+        # Attempt to补逗号 between object/list end and next key.
+        s = re.sub(r"([}\]])\s*(\"[A-Za-z_][A-Za-z0-9_]*\"\s*:)", r"\1, \2", s)
         # Remove control characters
         s = re.sub(r"[\x00-\x1f]", " ", s)
         return s
+
+    def _normalize_json_text(self, s: str) -> str:
+        """Normalize full-width punctuation that often breaks JSON parsing."""
+        table = {
+            "“": '"',
+            "”": '"',
+            "‘": "'",
+            "’": "'",
+            "，": ",",
+            "：": ":",
+            "（": "(",
+            "）": ")",
+        }
+        for a, b in table.items():
+            s = s.replace(a, b)
+        return s
+
+    def _trim_to_json_object(self, s: str) -> str:
+        """Trim text to the first balanced JSON object block if possible."""
+        start = s.find("{")
+        if start < 0:
+            return s
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start : i + 1]
+
+        # Fallback: clip to last closing brace if full balance not found.
+        end = s.rfind("}")
+        if end > start:
+            return s[start : end + 1]
+        return s[start:]
 
     def _build_result(self, text: str, data: dict) -> DeepResult:
         """Safely build DeepResult from parsed JSON dict."""

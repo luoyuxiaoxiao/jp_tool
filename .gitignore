@@ -36,7 +36,7 @@ backend/data/mecab_dic/
 backend/data/dicdir/
 
 # Runtime settings generated locally (may contain API keys)
-backend/data/app_settings.db
+backend/storage/data/app_settings.db
 
 # Local env files
 .env

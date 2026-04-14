@@ -1,8 +1,6 @@
 /// Data models matching the Python backend's JSON protocol.
 library;
 
-import 'dart:convert';
-
 // ── Token ────────────────────────────────────────────────────────────────────
 
 class Token {
@@ -30,6 +28,15 @@ class Token {
         base: j['base'] ?? '',
         conjugation: j['conjugation'] ?? '',
       );
+
+  Map<String, dynamic> toJson() => {
+        'surface': surface,
+        'reading': reading,
+        'pos': pos,
+        'pos_detail': posDetail,
+        'base': base,
+        'conjugation': conjugation,
+      };
 }
 
 // ── Grammar Match ────────────────────────────────────────────────────────────
@@ -62,6 +69,16 @@ class GrammarMatch {
         start: j['start'] ?? 0,
         end: j['end'] ?? 0,
       );
+
+  Map<String, dynamic> toJson() => {
+        'pattern': pattern,
+        'level': level,
+        'meaning_zh': meaningZh,
+        'meaning_ja': meaningJa,
+        'example': example,
+        'start': start,
+        'end': end,
+      };
 }
 
 // ── Basic Result (Phase 1) ──────────────────────────────────────────────────
@@ -79,12 +96,21 @@ class BasicResult {
 
   factory BasicResult.fromJson(Map<String, dynamic> j) => BasicResult(
         text: j['text'] ?? '',
-        tokens: (j['tokens'] as List?)?.map((t) => Token.fromJson(t)).toList() ?? [],
+        tokens:
+            (j['tokens'] as List?)?.map((t) => Token.fromJson(t)).toList() ??
+                [],
         grammarMatches: (j['grammar_matches'] as List?)
                 ?.map((g) => GrammarMatch.fromJson(g))
                 .toList() ??
             [],
       );
+
+  Map<String, dynamic> toJson() => {
+        'type': 'basic_result',
+        'text': text,
+        'tokens': tokens.map((t) => t.toJson()).toList(),
+        'grammar_matches': grammarMatches.map((g) => g.toJson()).toList(),
+      };
 }
 
 // ── Deep Result components ──────────────────────────────────────────────────
@@ -124,7 +150,8 @@ class SentenceComponent {
     this.reading = '',
   });
 
-  factory SentenceComponent.fromJson(Map<String, dynamic> j) => SentenceComponent(
+  factory SentenceComponent.fromJson(Map<String, dynamic> j) =>
+      SentenceComponent(
         fragment: j['fragment'] ?? '',
         role: j['role'] ?? '',
         reading: j['reading'] ?? '',
@@ -181,7 +208,10 @@ class ComparisonGroup {
 
   factory ComparisonGroup.fromJson(Map<String, dynamic> j) => ComparisonGroup(
         category: j['category'] ?? '',
-        items: (j['items'] as List?)?.map((i) => ComparisonItem.fromJson(i)).toList() ?? [],
+        items: (j['items'] as List?)
+                ?.map((i) => ComparisonItem.fromJson(i))
+                .toList() ??
+            [],
       );
 }
 
@@ -190,7 +220,8 @@ class CommonMistake {
   final String problem;
   final String correct;
 
-  const CommonMistake({required this.wrong, required this.problem, required this.correct});
+  const CommonMistake(
+      {required this.wrong, required this.problem, required this.correct});
 
   factory CommonMistake.fromJson(Map<String, dynamic> j) => CommonMistake(
         wrong: j['wrong'] ?? '',
@@ -247,20 +278,30 @@ class DeepResult {
 
   factory DeepResult.fromJson(Map<String, dynamic> j) => DeepResult(
         text: j['text'] ?? '',
-        coreGrammar:
-            (j['core_grammar'] as List?)?.map((g) => GrammarPoint.fromJson(g)).toList() ?? [],
+        coreGrammar: (j['core_grammar'] as List?)
+                ?.map((g) => GrammarPoint.fromJson(g))
+                .toList() ??
+            [],
         sentenceBreakdown: (j['sentence_breakdown'] as List?)
                 ?.map((s) => SentenceComponent.fromJson(s))
                 .toList() ??
             [],
-        grammarTree:
-            (j['grammar_tree'] as List?)?.map((n) => GrammarTreeNode.fromJson(n)).toList() ?? [],
-        comparisons:
-            (j['comparisons'] as List?)?.map((c) => ComparisonGroup.fromJson(c)).toList() ?? [],
-        commonMistakes:
-            (j['common_mistakes'] as List?)?.map((m) => CommonMistake.fromJson(m)).toList() ?? [],
+        grammarTree: (j['grammar_tree'] as List?)
+                ?.map((n) => GrammarTreeNode.fromJson(n))
+                .toList() ??
+            [],
+        comparisons: (j['comparisons'] as List?)
+                ?.map((c) => ComparisonGroup.fromJson(c))
+                .toList() ??
+            [],
+        commonMistakes: (j['common_mistakes'] as List?)
+                ?.map((m) => CommonMistake.fromJson(m))
+                .toList() ??
+            [],
         culturalContext: j['cultural_context'] ?? '',
-        applications: (j['applications'] as List?)?.map((a) => a.toString()).toList() ?? [],
+        applications:
+            (j['applications'] as List?)?.map((a) => a.toString()).toList() ??
+                [],
         levelAnnotations: (j['level_annotations'] as List?)
                 ?.map((a) => LevelAnnotation.fromJson(a))
                 .toList() ??
@@ -277,7 +318,8 @@ class AnalysisState {
 
   const AnalysisState({this.basic, this.deep, this.isLoadingDeep = false});
 
-  AnalysisState copyWith({BasicResult? basic, DeepResult? deep, bool? isLoadingDeep}) =>
+  AnalysisState copyWith(
+          {BasicResult? basic, DeepResult? deep, bool? isLoadingDeep}) =>
       AnalysisState(
         basic: basic ?? this.basic,
         deep: deep ?? this.deep,

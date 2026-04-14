@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -16,12 +17,52 @@ from fastapi.responses import HTMLResponse, Response
 from analyzer.tokenizer import tokenize_to_models
 from analyzer.models import BasicResult, DeepResult
 from capture.http_receiver import router as http_router, set_callback
-from backend.storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
+
+try:
+    from backend.storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
+    from backend.storage.analysis_store import (
+        upsert_basic_result,
+        upsert_deep_result,
+        get_recent_results,
+        prune_to_limit,
+    )
+except ModuleNotFoundError:
+    from storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
+    from storage.analysis_store import (
+        upsert_basic_result,
+        upsert_deep_result,
+        get_recent_results,
+        prune_to_limit,
+    )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("jp_tool")
 
 load_env_from_db()
+
+
+def _resolve_server_host() -> str:
+    host = str(os.environ.get("JP_TOOL_HOST", "0.0.0.0")).strip()
+    return host or "0.0.0.0"
+
+
+def _resolve_server_port() -> int:
+    raw = str(os.environ.get("JP_TOOL_PORT", "8765")).strip()
+    try:
+        port = int(raw)
+    except Exception:
+        logger.warning("Invalid JP_TOOL_PORT=%r, fallback to 8765", raw)
+        return 8765
+
+    if port < 1 or port > 65535:
+        logger.warning("Out-of-range JP_TOOL_PORT=%r, fallback to 8765", raw)
+        return 8765
+
+    return port
+
+
+_SERVER_HOST = _resolve_server_host()
+_SERVER_PORT = _resolve_server_port()
 
 
 _clipboard_task: asyncio.Task | None = None
@@ -58,6 +99,32 @@ def _normalize_shortcut(value: object, fallback: str) -> str:
     return text or fallback
 
 
+def _to_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _get_grammar_auto_learn_enabled() -> bool:
+    settings = get_runtime_settings()
+    raw = os.environ.get(
+        "JP_TOOL_GRAMMAR_AUTO_LEARN",
+        settings.get("JP_TOOL_GRAMMAR_AUTO_LEARN", "on"),
+    )
+    return _to_bool(raw, default=True)
+
+
+def _set_grammar_auto_learn_enabled(enabled: bool):
+    os.environ["JP_TOOL_GRAMMAR_AUTO_LEARN"] = "on" if enabled else "off"
+    save_runtime_settings(
+        {
+            "JP_TOOL_GRAMMAR_AUTO_LEARN": "on" if enabled else "off",
+        }
+    )
+
+
 def _get_shortcut_config() -> dict[str, str]:
     settings = get_runtime_settings()
     return {
@@ -67,6 +134,13 @@ def _get_shortcut_config() -> dict[str, str]:
                 settings.get("SHORTCUT_TOGGLE_CLIPBOARD", "ctrl+shift+b"),
             ),
             "ctrl+shift+b",
+        ),
+        "toggle_grammar_auto_learn": _normalize_shortcut(
+            os.environ.get(
+                "SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN",
+                settings.get("SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN", "ctrl+shift+g"),
+            ),
+            "ctrl+shift+g",
         ),
         "submit_analyze": _normalize_shortcut(
             os.environ.get(
@@ -92,7 +166,8 @@ async def lifespan(app: FastAPI):
     # Startup
     set_callback(on_new_text)
     await _set_clipboard_enabled(_clipboard_enabled)
-    logger.info("JP Grammar Analyzer backend started on ws://localhost:8765/ws")
+    visible_host = "localhost" if _SERVER_HOST in {"0.0.0.0", "::"} else _SERVER_HOST
+    logger.info("JP Grammar Analyzer backend started on ws://%s:%d/ws", visible_host, _SERVER_PORT)
     yield
     # Shutdown
     await _set_clipboard_enabled(False)
@@ -103,60 +178,91 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(http_router, prefix="/api")
 
 
-# ── Serve frontend HTML ─────────────────────────────────────────────────────
+# ── Serve frontend (prefer Flutter Web) ─────────────────────────────────────
 
-def _find_frontend_file(name: str) -> str | None:
-    """Locate frontend files in dev/packaged mode."""
+def _frontend_roots() -> list[str]:
+    """Frontend search roots in priority order."""
     candidates = [
-        os.path.join(os.path.dirname(__file__), "..", name),
-        os.path.join(os.path.dirname(__file__), "frontend", name),
-        os.path.join(getattr(sys, "_MEIPASS", ""), "frontend", name),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "build", "web")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "web_frontend")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend", "web")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend")),
+        os.path.abspath(os.path.join(getattr(sys, "_MEIPASS", ""), "frontend", "web")),
+        os.path.abspath(os.path.join(getattr(sys, "_MEIPASS", ""), "frontend")),
     ]
+
+    roots: list[str] = []
     for p in candidates:
-        if os.path.isfile(p):
-            return os.path.abspath(p)
+        if os.path.isdir(p) and p not in roots:
+            roots.append(p)
+    return roots
+
+
+def _resolve_frontend_asset(rel_path: str) -> str | None:
+    """Resolve a frontend asset safely from known roots."""
+    normalized = (rel_path or "").replace("\\", "/").lstrip("/")
+    if not normalized:
+        normalized = "index.html"
+
+    normalized = os.path.normpath(normalized).replace("\\", "/")
+    if normalized == ".." or normalized.startswith("../"):
+        return None
+
+    for root in _frontend_roots():
+        candidate = os.path.abspath(os.path.join(root, normalized))
+        try:
+            if os.path.commonpath([root, candidate]) != root:
+                continue
+        except ValueError:
+            continue
+        if os.path.isfile(candidate):
+            return candidate
+
     return None
 
-def _find_frontend_html() -> str | None:
-    """Locate the frontend HTML file (works both in dev and packaged mode)."""
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "..", "jp_manager.html"),         # dev
-        os.path.join(os.path.dirname(__file__), "frontend", "index.html"),        # packaged
-        os.path.join(getattr(sys, "_MEIPASS", ""), "frontend", "index.html"),     # PyInstaller
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return os.path.abspath(p)
-    return None
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
 
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/app", response_class=HTMLResponse)
 async def serve_frontend():
-    """Serve the frontend HTML — visit http://localhost:8765 in browser."""
-    path = _find_frontend_html()
-    if path:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-    return "<h1>Frontend not found</h1><p>Place jp_manager.html next to backend/</p>"
+    """Serve frontend entry, preferring Flutter Web index.html."""
+    index = _resolve_frontend_asset("index.html")
+    if index:
+        return _read_text(index)
+
+    legacy = _resolve_frontend_asset("jp_manager.html")
+    if legacy:
+        return _read_text(legacy)
+
+    return (
+        "<h1>Frontend not found</h1>"
+        "<p>Run <code>flutter build web</code> in <code>frontend/</code> first.</p>"
+    )
 
 
 @app.get("/jp_manager.html", response_class=HTMLResponse)
 async def serve_jp_manager_html():
-    path = _find_frontend_file("jp_manager.html")
+    path = _resolve_frontend_asset("jp_manager.html")
     if not path:
         return "<h1>jp_manager.html not found</h1>"
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+    return _read_text(path)
 
 
 @app.get("/jp_manager.ccs")
 async def serve_jp_manager_ccs():
-    path = _find_frontend_file("jp_manager.ccs")
+    path = _resolve_frontend_asset("jp_manager.ccs")
     if not path:
         return Response("/* jp_manager.ccs not found */", media_type="text/css")
-    with open(path, encoding="utf-8") as f:
-        return Response(f.read(), media_type="text/css")
+    return Response(_read_text(path), media_type="text/css")
 
 
 @app.get("/jp_manager.css")
@@ -462,6 +568,26 @@ async def clipboard_configure(body: dict):
     }
 
 
+@app.get("/api/grammar/auto-learn/status")
+async def grammar_auto_learn_status():
+    """Return grammar auto-learn status."""
+    return {
+        "status": "ok",
+        "enabled": _get_grammar_auto_learn_enabled(),
+    }
+
+
+@app.post("/api/grammar/auto-learn/configure")
+async def grammar_auto_learn_configure(body: dict):
+    """Enable/disable grammar auto-learning from LLM results."""
+    enabled = _to_bool(body.get("enabled", True), default=True)
+    _set_grammar_auto_learn_enabled(enabled)
+    return {
+        "status": "ok",
+        "enabled": enabled,
+    }
+
+
 @app.get("/api/shortcuts/config")
 async def shortcuts_config_get():
     return {
@@ -482,6 +608,10 @@ async def shortcuts_configure(body: dict):
         incoming.get("toggle_clipboard", current["toggle_clipboard"]),
         current["toggle_clipboard"],
     )
+    toggle_grammar_auto_learn = _normalize_shortcut(
+        incoming.get("toggle_grammar_auto_learn", current["toggle_grammar_auto_learn"]),
+        current["toggle_grammar_auto_learn"],
+    )
     submit_analyze = _normalize_shortcut(
         incoming.get("submit_analyze", current["submit_analyze"]),
         current["submit_analyze"],
@@ -494,6 +624,7 @@ async def shortcuts_configure(body: dict):
     save_runtime_settings(
         {
             "SHORTCUT_TOGGLE_CLIPBOARD": toggle_clipboard,
+            "SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN": toggle_grammar_auto_learn,
             "SHORTCUT_SUBMIT_ANALYZE": submit_analyze,
             "SHORTCUT_FOCUS_INPUT": focus_input,
         }
@@ -503,6 +634,61 @@ async def shortcuts_configure(body: dict):
         "status": "ok",
         "shortcuts": _get_shortcut_config(),
     }
+
+
+@app.get("/api/analysis/history")
+async def analysis_history(limit: int = 50):
+    """Return recent analysis records stored in SQLite (deduplicated by text)."""
+    items = await asyncio.to_thread(get_recent_results, max(1, min(limit, 500)))
+    return {
+        "status": "ok",
+        "count": len(items),
+        "items": items,
+    }
+
+
+@app.post("/api/analysis/history/prune")
+async def analysis_history_prune(body: dict):
+    """Prune old analysis records and keep only newest max_rows entries."""
+    raw = body.get("max_rows", 1000)
+    try:
+        max_rows = int(raw)
+    except Exception:
+        max_rows = 1000
+
+    deleted = await asyncio.to_thread(prune_to_limit, max_rows)
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "max_rows": max_rows,
+    }
+
+
+@app.get("/{asset_path:path}")
+async def serve_frontend_asset(asset_path: str):
+    """Serve frontend static assets with SPA fallback for Flutter Web."""
+    path = (asset_path or "").strip("/")
+
+    # Keep API and websocket paths owned by their dedicated routes.
+    if path.startswith("api/") or path == "ws":
+        return Response("Not Found", status_code=404)
+
+    resolved = _resolve_frontend_asset(path)
+    if resolved:
+        media_type, _ = mimetypes.guess_type(resolved)
+        return Response(
+            content=_read_bytes(resolved),
+            media_type=media_type or "application/octet-stream",
+        )
+
+    # SPA history fallback: non-file paths should return index.html.
+    leaf = os.path.basename(path)
+    if path and "." not in leaf:
+        index = _resolve_frontend_asset("index.html")
+        if index:
+            return HTMLResponse(_read_text(index))
+
+    return Response("Not Found", status_code=404)
 
 
 # ── Connected WebSocket clients ──────────────────────────────────────────────
@@ -539,6 +725,7 @@ async def on_new_text(text: str):
         grammar_matches=grammar_matches,
     )
     await broadcast(basic.model_dump_json())
+    await asyncio.to_thread(upsert_basic_result, text, basic.model_dump_json())
 
     # Phase 2: LLM deep analysis (async, optional)
     from llm import get_provider
@@ -560,6 +747,7 @@ async def _deep_analysis(text: str):
         result = await provider.analyze(text)
         if result:
             await broadcast(result.model_dump_json())
+            await asyncio.to_thread(upsert_deep_result, text, result.model_dump_json())
             # Auto-learn new grammar patterns from LLM output
             from analyzer.grammar_db import learn_from_deep_result
             n = learn_from_deep_result(result)
@@ -600,4 +788,4 @@ async def websocket_endpoint(ws: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8765)
+    uvicorn.run(app, host=_SERVER_HOST, port=_SERVER_PORT)

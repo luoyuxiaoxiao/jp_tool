@@ -203,7 +203,7 @@ class _LlmConfigScreenState extends State<LlmConfigScreen> {
                   ),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    value: _backend,
+                    initialValue: _backend,
                     decoration: const InputDecoration(
                       labelText: '后端类型',
                       border: OutlineInputBorder(),
@@ -255,7 +255,7 @@ class _LlmConfigScreenState extends State<LlmConfigScreen> {
                     if (_fetchedModels.isNotEmpty) ...[
                       const SizedBox(height: 10),
                       DropdownButtonFormField<String>(
-                        value: _fetchedModels
+                        initialValue: _fetchedModels
                                 .contains(_activeModelCtrl.text.trim())
                             ? _activeModelCtrl.text.trim()
                             : null,
@@ -324,7 +324,7 @@ class _LlmConfigScreenState extends State<LlmConfigScreen> {
                   if (_useApi) ...[
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      value: _apiFormat,
+                      initialValue: _apiFormat,
                       decoration: const InputDecoration(
                         labelText: 'API 格式',
                         border: OutlineInputBorder(),

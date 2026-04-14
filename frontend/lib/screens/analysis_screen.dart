@@ -22,6 +22,10 @@ class _ToggleClipboardIntent extends Intent {
   const _ToggleClipboardIntent();
 }
 
+class _ToggleGrammarAutoLearnIntent extends Intent {
+  const _ToggleGrammarAutoLearnIntent();
+}
+
 class _SubmitAnalyzeIntent extends Intent {
   const _SubmitAnalyzeIntent();
 }
@@ -71,12 +75,30 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     );
   }
 
+  Future<void> _toggleGrammarAutoLearnByShortcut(WebSocketService ws) async {
+    final target = !ws.grammarAutoLearnEnabled;
+    final ok = await ws.setGrammarAutoLearnEnabled(target);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? (target ? '快捷键：已开启语法自动学习' : '快捷键：已关闭语法自动学习') : '快捷键执行失败，请检查后端连接',
+        ),
+      ),
+    );
+  }
+
   Map<ShortcutActivator, Intent> _buildShortcuts(ShortcutConfig cfg) {
     final map = <ShortcutActivator, Intent>{};
 
     final toggle = parseShortcutActivator(cfg.toggleClipboard);
     if (toggle != null) {
       map[toggle] = const _ToggleClipboardIntent();
+    }
+
+    final toggleAutoLearn = parseShortcutActivator(cfg.toggleGrammarAutoLearn);
+    if (toggleAutoLearn != null) {
+      map[toggleAutoLearn] = const _ToggleGrammarAutoLearnIntent();
     }
 
     final submit = parseShortcutActivator(cfg.submitAnalyze);
@@ -104,6 +126,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               _ToggleClipboardIntent: CallbackAction<_ToggleClipboardIntent>(
                 onInvoke: (_) {
                   unawaited(_toggleClipboardByShortcut(ws));
+                  return null;
+                },
+              ),
+              _ToggleGrammarAutoLearnIntent:
+                  CallbackAction<_ToggleGrammarAutoLearnIntent>(
+                onInvoke: (_) {
+                  unawaited(_toggleGrammarAutoLearnByShortcut(ws));
                   return null;
                 },
               ),
