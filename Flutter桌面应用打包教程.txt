@@ -43,7 +43,7 @@
      cd F:\jp_tool
 
   2. 运行:
-     flutter打包.bat
+     flutter打包Gemini版.bat
 
   3. 脚本会自动:
      - 生成 windows/ 平台文件

@@ -1,0 +1,69 @@
+# =========================
+# Python (backend)
+# =========================
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+backend/venv/
+backend/env/
+
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Packaging output
+backend/build/
+backend/dist/
+backend/*.spec
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# =========================
+# Flutter / Dart (frontend)
+# =========================
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/.pub/
+frontend/.pub-cache/
+frontend/build/
+frontend/coverage/
+
+# Desktop/Platform generated artifacts
+frontend/windows/flutter/ephemeral/
+frontend/windows/x64/
+frontend/linux/flutter/ephemeral/
+frontend/macos/Flutter/ephemeral/
+frontend/ios/Flutter/ephemeral/
+
+# Android generated/local files
+frontend/android/.gradle/
+frontend/android/local.properties
+
+# =========================
+# Editor / OS / logs
+# =========================
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
