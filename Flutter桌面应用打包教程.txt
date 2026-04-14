@@ -1,0 +1,145 @@
+═══════════════════════════════════════════════════════════════
+        Flutter 桌面应用打包 - 详细步骤
+═══════════════════════════════════════════════════════════════
+
+前提说明:
+  浏览器版 (test.html) 已经完全够用。
+  Flutter 桌面应用是可选的，优势是原生窗口体验。
+  Flutter 前端是"壳"，后端仍然需要先启动。
+
+═══════════════════════════════════════════════════════════════
+一、环境准备 (只需做一次)
+═══════════════════════════════════════════════════════════════
+
+1. 安装 Flutter SDK
+   下载: https://docs.flutter.dev/get-started/install/windows/desktop
+   建议解压到: F:\Flutter
+
+2. 添加到 PATH
+   系统设置 → 环境变量 → 用户变量 → Path → 新建:
+   F:\Flutter\bin
+
+3. 验证 (打开新的 CMD):
+   flutter --version
+   → 应显示 Flutter 版本号
+
+4. 安装 Visual Studio (Flutter Windows 桌面编译需要)
+   下载: https://visualstudio.microsoft.com/zh-hans/downloads/
+   选择: Visual Studio Community (免费)
+   安装时勾选: 「使用 C++ 的桌面开发」工作负载
+
+5. 检查环境:
+   flutter doctor
+   → 确保 [✓] Flutter, [✓] Windows 没有问题
+   → Chrome 和 Android 的警告可以忽略
+
+═══════════════════════════════════════════════════════════════
+二、初始化 Flutter 项目 (只需做一次)
+═══════════════════════════════════════════════════════════════
+
+方法 A: 用脚本 (推荐)
+
+  1. 打开 CMD，进入项目目录:
+     cd F:\jp_tool
+
+  2. 运行:
+     flutter打包.bat
+
+  3. 脚本会自动:
+     - 生成 windows/ 平台文件
+     - 安装依赖
+     - 编译 Release 版本
+
+方法 B: 手动操作
+
+  1. 打开 CMD:
+     cd F:\jp_tool\frontend
+
+  2. 生成平台文件 (因为项目从 WSL 复制过来，没有 windows/ 目录):
+
+     REM 创建临时项目
+     flutter create --org com.jptool --project-name jp_grammar_analyzer --platforms windows _temp
+
+     REM 复制平台文件
+     xcopy /E /I /Y _temp\windows windows
+     xcopy /E /I /Y _temp\test test
+
+     REM 删除临时项目
+     rmdir /S /Q _temp
+
+  3. 安装依赖:
+     flutter pub get
+
+  4. 测试运行 (Debug 模式，启动较慢):
+     flutter run -d windows
+
+  5. 编译 Release 版本:
+     flutter build windows --release
+
+  6. 输出位置:
+     F:\jp_tool\frontend\build\windows\x64\runner\Release\
+     里面的 jp_grammar_analyzer.exe 就是桌面应用
+
+═══════════════════════════════════════════════════════════════
+三、使用 Flutter 桌面应用
+═══════════════════════════════════════════════════════════════
+
+1. 先启动后端:
+   双击 F:\jp_tool\启动.bat → 选 [3] 仅后端
+
+2. 再启动 Flutter 应用:
+   双击 jp_grammar_analyzer.exe
+
+3. 应用功能:
+   - 左侧: 历史记录面板
+   - 顶部: 输入框 + 解析按钮
+   - 主区域: 分析结果 (分词、语法标注、深度分析等)
+   - 右上角: 连接状态 + 设置按钮
+   - 设置页: 可修改 WebSocket 服务器地址
+
+═══════════════════════════════════════════════════════════════
+四、Flutter 应用分发
+═══════════════════════════════════════════════════════════════
+
+如果要给别人用:
+
+1. 复制整个 Release 目录:
+   F:\jp_tool\frontend\build\windows\x64\runner\Release\
+
+2. 里面包含:
+   - jp_grammar_analyzer.exe    ← 主程序
+   - flutter_windows.dll        ← Flutter 运行时
+   - 其他 .dll 文件             ← 依赖库
+   - data\                      ← 资源文件
+
+3. 对方电脑需要:
+   - Windows 10 或更高版本
+   - Visual C++ Redistributable (大多数电脑已有)
+     下载: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+4. 对方还需要单独运行后端 (Python 版或 exe 打包版)
+
+═══════════════════════════════════════════════════════════════
+五、注意事项
+═══════════════════════════════════════════════════════════════
+
+1. Flutter 桌面应用只是前端展示层，所有分析逻辑在后端
+   → 必须先启动后端，Flutter 应用才能工作
+
+2. 如果只是自己用，浏览器版 (http://localhost:8765) 完全够用
+   → Flutter 版的优势是独立窗口、更原生的体验
+
+3. 如果 flutter pub get 报错:
+   → 检查网络连接
+   → 可设置 Flutter 中国镜像:
+     set PUB_HOSTED_URL=https://pub.flutter-io.cn
+     set FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
+     flutter pub get
+
+4. 如果 flutter build windows 报错:
+   → 确认已安装 Visual Studio + C++ 桌面开发工作负载
+   → 运行 flutter doctor -v 查看详细错误
+
+5. Debug 模式 vs Release 模式:
+   - flutter run -d windows      → Debug，启动慢，有热重载
+   - flutter build windows       → Release，启动快，适合日常使用

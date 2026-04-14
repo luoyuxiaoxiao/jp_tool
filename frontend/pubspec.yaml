@@ -1,0 +1,23 @@
+name: jp_grammar_analyzer
+description: Real-time Japanese grammar analyzer for Galgame
+version: 1.0.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  web_socket_channel: ^3.0.0
+  provider: ^6.1.0
+  google_fonts: ^6.1.0
+  shared_preferences: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
