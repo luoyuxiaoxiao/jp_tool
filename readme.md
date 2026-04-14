@@ -1,6 +1,6 @@
 # 日语语法解析器 (JP Grammar Analyzer)
 
-一个面向日语学习与精读场景的本地化语法分析工具。
+一个简易面向日语学习与精读场景的本地化语法分析工具。用Claude做着自己玩的。
 支持分词、注音、JLPT 语法点识别，并可接入 Ollama 或 Claude 进行深度语法讲解。
 
 ---
@@ -116,19 +116,6 @@ curl http://localhost:8765/api/llm/status
 
 ---
 
-## 与 LunaTranslator 联动
-
-将插件文件复制到 LunaTranslator 插件目录：
-
-- `luna_plugin/jp_tool_sender.py`
-
-建议使用流程：
-
-1. 启动本项目后端
-2. 启动 LunaTranslator 并启用插件
-3. 游戏文本将自动推送到解析器
-
----
 
 ## 打包说明
 
@@ -142,17 +129,6 @@ curl http://localhost:8765/api/llm/status
 
 ---
 
-## Git 提交建议
-
-仓库已配置 `.gitignore`，默认不上传以下大体积内容：
-
-- Python 虚拟环境（如 `.venv/`）
-- Flutter 构建产物（如 `frontend/build/`、`frontend/windows/x64/`）
-- 本地词典缓存目录（如 `backend/data/unidic_lite/`）
-
-如果你在其他机器拉取过旧历史，请重新克隆或同步主分支历史。
-
----
 
 ## 许可证
 
@@ -197,7 +173,7 @@ curl http://localhost:8765/api/llm/status
 
 ### 2. 迁移项目到 Windows 
 
-
+```text
 迁移后的目录结构:
     F:\jp_tool\
     ├── 启动.bat              ← 双击启动
@@ -208,7 +184,7 @@ curl http://localhost:8765/api/llm/status
     ├── backend\              ← Python 后端
     ├── frontend\             ← Flutter 前端源码
     └── luna_plugin\          ← LunaTranslator 插件
-
+```
 
 启动.bat 会自动重新创建 Windows 版的虚拟环境。
 
