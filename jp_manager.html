@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>日语语法解析器</title>
+<link rel="stylesheet" href="/jp_manager.ccs">
+</head>
+<body>
+
+<div class="header-row">
+  <h1>日语语法解析器</h1>
+  <div class="status-bar">
+    <div class="status-item"><span class="dot off" id="wsDot"></span><span id="wsText">未连接</span></div>
+    <div class="status-item"><span class="dot off" id="llmDot"></span><span id="llmText">LLM: 检测中</span></div>
+  </div>
+</div>
+
+<div class="input-row">
+  <input type="text" id="inp" placeholder="输入日文，或从 LunaTranslator 自动获取...">
+  <button onclick="send()">解析</button>
+</div>
+
+<div class="control-row">
+  <label class="toggle-label">
+    <input type="checkbox" id="clipboardToggle" onchange="toggleClipboard()">
+    启用剪贴板自动监听
+  </label>
+  <span id="clipText">剪贴板: 检测中</span>
+</div>
+
+<div id="results"></div>
+<div id="deepLoading" style="display:none"></div>
+
+<details class="section" style="cursor:pointer">
+  <summary>原始数据 (JSON)</summary>
+  <pre id="raw" style="margin-top:8px">等待数据...</pre>
+</details>
+
+<script>
+const COLORS = { N5:'#4CAF50', N4:'#2196F3', N3:'#FF9800', N2:'#9C27B0', N1:'#F44336' };
+const POS_COLORS = { '動詞':'#89b4fa','名詞':'#a6e3a1','形容詞':'#fab387','副詞':'#cba6f7','助詞':'#94e2d5','助動詞':'#f5c2e7','接続詞':'#89dceb' };
+const POS_ZH = { '動詞':'动词','名詞':'名词','形容詞':'形容词','副詞':'副词','助詞':'助词','助動詞':'助动词','接続詞':'接续词','記号':'符号','感動詞':'感叹词','連体詞':'连体词','接頭辞':'接头辞','接尾辞':'接尾辞' };
+let ws;
+let llmEnabled = false;
+
+function kata2hira(str) { return str.replace(/[\u30A1-\u30F6]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60)); }
+function hasKanji(str) { return /[\u4E00-\u9FFF\u3400-\u4DBF]/.test(str); }
+function posZh(pos) { for (const [k,v] of Object.entries(POS_ZH)) if (pos.includes(k)) return v; return pos; }
+function categoryZh(name) {
+  const t = (name || '').toLowerCase();
+  if (t.includes('culture')) return '文化语境';
+  if (t.includes('condition')) return '条件表达差异';
+  if (t.includes('emotion') || t.includes('psycholog')) return '心理变化表达';
+  if (t.includes('honorific') || t.includes('polite')) return '敬语与礼貌表达';
+  return name;
+}
+
+function connect() {
+  ws = new WebSocket('ws://localhost:8765/ws');
+  ws.onopen = () => {
+    document.getElementById('wsDot').className='dot on';
+    document.getElementById('wsText').textContent='已连接';
+    checkLLM();
+    checkClipboard();
+  };
+  ws.onclose = () => {
+    document.getElementById('wsDot').className='dot off';
+    document.getElementById('wsText').textContent='已断开 - 重连中...';
+    setTimeout(connect, 3000);
+  };
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    document.getElementById('raw').textContent = JSON.stringify(data, null, 2);
+    if (data.type === 'basic_result') renderBasic(data);
+    if (data.type === 'deep_result') {
+      document.getElementById('deepLoading').style.display='none';
+      renderDeep(data);
+    }
+  };
+}
+
+function send() {
+  const text = document.getElementById('inp').value.trim();
+  if (text && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({type:'analyze', text}));
+    if (llmEnabled) {
+      document.getElementById('deepLoading').innerHTML = '<div class="loading"><div class="spinner"></div>正在进行深度语法分析...</div>';
+      document.getElementById('deepLoading').style.display = 'block';
+    } else {
+      document.getElementById('deepLoading').style.display = 'none';
+    }
+  }
+}
+document.getElementById('inp').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+async function checkLLM() {
+  try {
+    const r = await fetch('/api/llm/status');
+    const d = await r.json();
+    const dot = document.getElementById('llmDot');
+    const txt = document.getElementById('llmText');
+    if (d.enabled && d.available !== false) {
+      llmEnabled = true;
+      dot.className = 'dot on';
+      txt.textContent = `LLM: ${d.model || d.provider}`;
+    } else if (d.enabled) {
+      llmEnabled = true;
+      dot.className = 'dot warn';
+      txt.textContent = 'LLM: 模型不可用';
+    } else {
+      llmEnabled = false;
+      dot.className = 'dot off';
+      txt.textContent = 'LLM: 未启用';
+    }
+  } catch (e) {
+    llmEnabled = false;
+    document.getElementById('llmDot').className = 'dot off';
+    document.getElementById('llmText').textContent = 'LLM: 未知';
+  }
+}
+
+async function checkClipboard() {
+  const txt = document.getElementById('clipText');
+  const toggle = document.getElementById('clipboardToggle');
+  try {
+    const r = await fetch('/api/clipboard/status');
+    const d = await r.json();
+    toggle.checked = !!d.enabled;
+    txt.textContent = d.enabled ? '剪贴板: 已启用' : '剪贴板: 已关闭';
+  } catch (e) {
+    txt.textContent = '剪贴板: 状态未知';
+  }
+}
+
+async function toggleClipboard() {
+  const toggle = document.getElementById('clipboardToggle');
+  const txt = document.getElementById('clipText');
+  const enabled = !!toggle.checked;
+  try {
+    const r = await fetch('/api/clipboard/configure', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({enabled})
+    });
+    const d = await r.json();
+    toggle.checked = !!d.enabled;
+    txt.textContent = d.enabled ? '剪贴板: 已启用' : '剪贴板: 已关闭';
+  } catch (e) {
+    toggle.checked = !enabled;
+    txt.textContent = '剪贴板: 切换失败';
+  }
+}
+
+function renderBasic(d) {
+  let html = '';
+  html += '<div class="section"><h2><span class="icon">📖</span> 原文 + 语法等级</h2><div class="original">';
+
+  const cl = new Array(d.text.length).fill(null);
+  for (const m of d.grammar_matches) {
+    for (let i = m.start; i < m.end && i < d.text.length; i++) cl[i] = cl[i] || m.level;
+  }
+
+  let pos = 0;
+  for (const t of d.tokens) {
+    const idx = d.text.indexOf(t.surface, pos);
+    if (idx > pos) html += d.text.substring(pos, idx);
+    const start = idx >= 0 ? idx : pos;
+    const end = start + t.surface.length;
+
+    let lvl = null;
+    for (let i = start; i < end && i < cl.length; i++) {
+      if (cl[i]) { lvl = cl[i]; break; }
+    }
+
+    const underline = lvl ? `text-decoration:underline 3px ${COLORS[lvl] || '#888'};text-underline-offset:6px;` : '';
+    if (hasKanji(t.surface) && t.reading) {
+      html += `<ruby style="${underline}">${t.surface}<rt>${kata2hira(t.reading)}</rt></ruby>`;
+    } else {
+      html += underline ? `<span style="${underline}">${t.surface}</span>` : t.surface;
+    }
+
+    pos = end;
+  }
+
+  if (pos < d.text.length) html += d.text.substring(pos);
+  html += '</div><div class="legend">';
+  for (const [k,v] of Object.entries(COLORS)) html += `<span><i style="background:${v}"></i>${k}</span>`;
+  html += '</div></div>';
+
+  html += '<div class="section"><h2><span class="icon">🔤</span> 分词详情</h2>';
+  for (const t of d.tokens) {
+    const pc = Object.entries(POS_COLORS).find(([k]) => t.pos.includes(k));
+    const c = pc ? pc[1] : '#585b70';
+    html += `<div class="token" style="border:1px solid ${c}40;background:${c}15">`;
+    if (t.reading) html += `<div class="reading">${kata2hira(t.reading)}</div>`;
+    html += `<div><b>${t.surface}</b></div><div class="pos" style="color:${c}">${posZh(t.pos)}</div>`;
+    if (t.base && t.base !== t.surface) html += `<div class="reading">(${t.base})</div>`;
+    html += '</div>';
+  }
+  html += '</div>';
+
+  html += '<div class="section"><h2><span class="icon">📝</span> 语法匹配</h2>';
+  if (d.grammar_matches.length === 0) html += '<div style="color:#a6adc8;font-size:13px">未匹配到已知语法模式</div>';
+  for (const m of d.grammar_matches) {
+    const c = COLORS[m.level] || '#888';
+    html += `<div class="grammar-item" style="border-color:${c}"><b>${m.pattern}</b><span class="badge" style="background:${c}">${m.level}</span>`;
+    if (m.meaning_zh) html += `<br><span style="font-size:13px;color:#a6adc8">${m.meaning_zh}</span>`;
+    html += '</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('results').innerHTML = html;
+}
+
+function renderDeep(d) {
+  let html = document.getElementById('results').innerHTML;
+
+  if (d.core_grammar && d.core_grammar.length) {
+    html += '<div class="section"><h2><span class="icon">🎯</span> 核心语法解析</h2>';
+    d.core_grammar.forEach((g,i) => {
+      const c = COLORS[g.level] || '#888';
+      html += `<div class="grammar-item" style="border-color:${c}"><b>(${i+1}) ${g.grammar}</b><span class="badge" style="background:${c}">${g.level}</span>`;
+      if (g.structure) html += `<br><span style="font-size:13px;color:#bac2de">结构：${g.structure}</span>`;
+      if (g.function) html += `<br><span style="font-size:13px;color:#bac2de">功能：${g.function}</span>`;
+      if (g.comparison) html += `<br><span style="font-size:13px;color:#bac2de">对比：${g.comparison}</span>`;
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  if (d.sentence_breakdown && d.sentence_breakdown.length) {
+    html += '<div class="section"><h2><span class="icon">🧩</span> 句子结构分解</h2>';
+    d.sentence_breakdown.forEach((s,i,a) => {
+      const isLast = i === a.length - 1;
+      const pre = isLast ? '<span style="color:#f9e2af;font-weight:bold">= </span>' : '<span style="color:#6c7086">+ </span>';
+      html += `<div style="margin:4px 0;display:flex;align-items:center;gap:6px">${pre}<span style="background:#45475a;padding:3px 8px;border-radius:4px;font-weight:bold;font-size:15px">${s.fragment}</span><span style="font-size:12px;color:#a6adc8;border:1px solid #585b70;padding:2px 6px;border-radius:4px">${s.role}</span></div>`;
+    });
+    html += '</div>';
+  }
+
+  if (d.grammar_tree && d.grammar_tree.length) {
+    html += '<div class="section"><h2><span class="icon">🌳</span> 语法层级关系</h2><div style="padding-left:4px">';
+    function renderTree(nodes, depth) {
+      let h = '';
+      nodes.forEach((n) => {
+        const indent = depth * 24;
+        const colors = ['#f9e2af','#89b4fa','#a6e3a1','#cba6f7','#fab387'];
+        const c = colors[depth % colors.length];
+        const prefix = depth === 0 ? '' : '├─ ';
+        h += `<div class="tree-node" style="padding-left:${indent}px">`;
+        h += `<span style="color:#6c7086">${prefix}</span>`;
+        h += `<span class="tree-label" style="color:${c}">${n.label}</span>`;
+        if (n.note) h += ` <span class="tree-note">(${n.note})</span>`;
+        h += '</div>';
+        if (n.children && n.children.length) h += renderTree(n.children, depth + 1);
+      });
+      return h;
+    }
+    html += renderTree(d.grammar_tree, 0);
+    html += '</div></div>';
+  }
+
+  if (d.comparisons && d.comparisons.length) {
+    html += '<div class="section"><h2><span class="icon">⚖️</span> 近义表达对比</h2>';
+    d.comparisons.forEach(cg => {
+      html += `<div class="cmp-cat">${categoryZh(cg.category)}</div>`;
+      html += '<table class="cmp-table"><tr><th>表达</th><th>例句</th><th>特征</th></tr>';
+      (cg.items || []).forEach(item => {
+        html += `<tr><td style="font-weight:bold;white-space:nowrap">${item.expression}</td><td>${item.example}</td><td>${item.score || item.note || ''}</td></tr>`;
+      });
+      html += '</table><div style="height:10px"></div>';
+    });
+    html += '</div>';
+  }
+
+  if (d.common_mistakes && d.common_mistakes.length) {
+    html += '<div class="section"><h2><span class="icon">⚠️</span> 常见错误</h2>';
+    d.common_mistakes.forEach(m => {
+      html += '<div style="margin:6px 0;padding:8px;background:rgba(243,139,168,0.06);border-radius:6px">';
+      html += `<div><span style="color:#f38ba8;text-decoration:line-through">✗ ${m.wrong}</span></div>`;
+      html += `<div style="font-size:12px;color:#a6adc8;margin:2px 0 2px 18px">问题：${m.problem}</div>`;
+      html += `<div><span style="color:#a6e3a1">✓ ${m.correct}</span></div></div>`;
+    });
+    html += '</div>';
+  }
+
+  if (d.cultural_context) {
+    html += `<div class="section"><h2><span class="icon">🏯</span> 文化语境</h2><p style="font-size:14px;line-height:1.7">${d.cultural_context}</p></div>`;
+  }
+
+  if (d.applications && d.applications.length) {
+    html += '<div class="section"><h2><span class="icon">💡</span> 应用拓展</h2>';
+    d.applications.forEach(a => html += `<div style="font-size:14px;margin:4px 0;padding-left:12px">• ${a}</div>`);
+    html += '</div>';
+  }
+
+  document.getElementById('results').innerHTML = html;
+}
+
+connect();
+</script>
+</body>
+</html>

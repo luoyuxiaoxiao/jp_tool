@@ -53,7 +53,14 @@ pyinstaller --noconfirm --onedir --name jp_grammar ^
 REM ── 复制前端文件 ──
 echo [4/4] 复制前端文件...
 if not exist dist\jp_grammar\frontend mkdir dist\jp_grammar\frontend
-copy /Y ..\test.html dist\jp_grammar\frontend\index.html >nul
+if exist ..\jp_manager.html (
+    copy /Y ..\jp_manager.html dist\jp_grammar\frontend\index.html >nul
+) else (
+    echo [WARN] 未找到 ..\jp_manager.html，前端页面可能缺失
+)
+if exist ..\jp_manager.ccs (
+    copy /Y ..\jp_manager.ccs dist\jp_grammar\frontend\jp_manager.ccs >nul
+)
 
 REM ── 创建启动脚本 ──
 (

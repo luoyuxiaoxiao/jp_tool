@@ -1,9 +1,18 @@
-"""LLM provider package — auto-detects Ollama if available."""
+"""LLM provider package.
+
+Supported backends:
+- ollama: local Ollama
+- api: generic HTTP API provider (openai-compatible or anthropic)
+- claude: backward-compatible alias for anthropic API
+- off/none: disable deep analysis
+"""
 
 from __future__ import annotations
 
 import logging
 import os
+
+from backend.storage.settings_store import load_env_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -15,28 +24,31 @@ def get_provider():
     """Return the configured LLM provider, or None if disabled.
 
     Priority:
-    1. JP_TOOL_LLM=claude  → Claude API (needs ANTHROPIC_API_KEY)
-    2. JP_TOOL_LLM=ollama  → Ollama (explicit)
-    3. JP_TOOL_LLM not set → auto-detect Ollama at localhost:11434
+    1. JP_TOOL_LLM=ollama  -> Ollama (explicit)
+    2. JP_TOOL_LLM=api     -> Generic API (openai/anthropic)
+    3. JP_TOOL_LLM=claude  -> Anthropic API (compat alias)
+    4. JP_TOOL_LLM not set -> auto-detect Ollama at localhost:11434
     """
     global _provider, _initialized
     if _initialized:
         return _provider
 
+    load_env_from_db()
+
     _initialized = True
     backend = os.environ.get("JP_TOOL_LLM", "auto").lower()
 
-    if backend == "claude":
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if api_key:
-            from .claude_provider import ClaudeProvider
-            _provider = ClaudeProvider(api_key)
-            logger.info("LLM provider: Claude API")
-        else:
-            logger.warning("ANTHROPIC_API_KEY not set, Claude provider disabled")
-
-    elif backend == "ollama":
+    if backend == "ollama":
         _init_ollama()
+
+    elif backend == "api":
+        _init_api()
+
+    elif backend == "claude":
+        _init_api(force_format="anthropic")
+
+    elif backend == "anthropic":
+        _init_api(force_format="anthropic")
 
     elif backend == "auto":
         # Auto-detect: try Ollama first
@@ -44,7 +56,7 @@ def get_provider():
         if _provider is None:
             logger.info("No LLM provider detected. Deep analysis disabled.")
             logger.info("  To enable: install Ollama and run 'ollama pull qwen2.5:7b'")
-            logger.info("  Or set JP_TOOL_LLM=claude with ANTHROPIC_API_KEY")
+            logger.info("  Or set JP_TOOL_LLM=api and provide API_KEY")
 
     elif backend == "none" or backend == "off":
         logger.info("LLM provider disabled by config")
@@ -87,6 +99,57 @@ def _init_ollama(silent: bool = False):
     except Exception as e:
         if not silent:
             logger.warning("Cannot connect to Ollama at %s: %s", base_url, e)
+
+
+def _init_api(silent: bool = False, force_format: str | None = None):
+    """Initialize generic API provider."""
+    global _provider
+
+    api_format = (force_format or os.environ.get("API_FORMAT", "openai")).strip().lower()
+    if api_format == "claude":
+        api_format = "anthropic"
+
+    if api_format not in {"openai", "anthropic"}:
+        if not silent:
+            logger.warning("Unsupported API_FORMAT='%s' (expected openai/anthropic)", api_format)
+        return
+
+    if api_format == "anthropic":
+        api_key = os.environ.get("API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
+        model = os.environ.get("API_MODEL") or os.environ.get(
+            "ANTHROPIC_MODEL", "claude-sonnet-4-20250514"
+        )
+        base_url = os.environ.get("API_BASE_URL") or os.environ.get(
+            "ANTHROPIC_BASE_URL", "https://api.anthropic.com"
+        )
+    else:
+        api_key = os.environ.get("API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        model = os.environ.get("API_MODEL") or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        base_url = os.environ.get("API_BASE_URL") or os.environ.get(
+            "OPENAI_BASE_URL", "https://api.openai.com"
+        )
+
+    if not api_key:
+        if not silent:
+            logger.warning("API key not set. Please set API_KEY.")
+        return
+
+    timeout_text = os.environ.get("API_TIMEOUT", "30")
+    try:
+        timeout = float(timeout_text)
+    except Exception:
+        timeout = 30.0
+
+    from .api_provider import ApiProvider
+
+    _provider = ApiProvider(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        api_format=api_format,
+        timeout=timeout,
+    )
+    logger.info("LLM provider: API (%s, %s)", api_format, model)
 
 
 def reconfigure(backend: str, **kwargs):

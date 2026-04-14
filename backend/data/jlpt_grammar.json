@@ -968,5 +968,38 @@
       "动词过去时态「休みました」"
     ],
     "auto_learned": true
+  },
+  {
+    "pattern": "副詞用動詞",
+    "level": "N3",
+    "meaning_zh": "程度限定",
+    "meaning_ja": "",
+    "example": "",
+    "regexes": [
+      "副詞用動詞"
+    ],
+    "auto_learned": true
+  },
+  {
+    "pattern": "形容詞連用形+が",
+    "level": "N2",
+    "meaning_zh": "結果を表す",
+    "meaning_ja": "",
+    "example": "",
+    "regexes": [
+      "形容詞連用形\\+が"
+    ],
+    "auto_learned": true
+  },
+  {
+    "pattern": "自動詞の連用形+て",
+    "level": "N2",
+    "meaning_zh": "動作の結果を表す",
+    "meaning_ja": "",
+    "example": "",
+    "regexes": [
+      "自動詞の連用形\\+て"
+    ],
+    "auto_learned": true
   }
 ]

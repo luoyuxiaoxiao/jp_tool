@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 title 日语语法解析器 - 启动面板
 
@@ -59,6 +60,7 @@ echo.
 set "choice="
 set /p choice="  输入选项 (1-4, 默认1): "
 if "%choice%"=="" set "choice=1"
+set "choice=%choice: =%"
 
 REM ── 配置 LLM ──
 if "%choice%"=="1" (
@@ -105,11 +107,12 @@ echo.
 echo  选择 LLM 提供者:
 echo    [1] Ollama (本地大模型, 默认 qwen2.5:7b)
 echo    [2] Ollama (自定义模型名)
-echo    [3] Claude API (需要 API Key)
+echo    [3] 通用 API (OpenAI兼容 / Anthropic)
 echo    [4] 不使用大模型
 echo.
 set "llm_choice="
 set /p llm_choice="  输入选项 (1-4): "
+set "llm_choice=%llm_choice: =%"
 
 if "%llm_choice%"=="1" (
     set "JP_TOOL_LLM=ollama"
@@ -119,9 +122,39 @@ if "%llm_choice%"=="1" (
     set "OLLAMA_MODEL="
     set /p OLLAMA_MODEL="  输入模型名 (如 qwen3:8b): "
 ) else if "%llm_choice%"=="3" (
-    set "JP_TOOL_LLM=claude"
-    set "ANTHROPIC_API_KEY="
-    set /p ANTHROPIC_API_KEY="  输入 Anthropic API Key: "
+    set "JP_TOOL_LLM=api"
+    set "API_FORMAT=openai"
+    set /p API_FORMAT="  输入 API 格式 (openai/anthropic, 默认 openai): "
+    if "!API_FORMAT!"=="" set "API_FORMAT=openai"
+
+    if /i "!API_FORMAT!"=="anthropic" (
+        set "API_BASE_URL=https://api.anthropic.com"
+        set "API_MODEL=claude-sonnet-4-20250514"
+    ) else (
+        set "API_BASE_URL=https://api.openai.com"
+        set "API_MODEL=gpt-4o-mini"
+    )
+
+    set /p API_BASE_URL="  输入 API Base URL (默认 !API_BASE_URL!): "
+    if "!API_BASE_URL!"=="" (
+        if /i "!API_FORMAT!"=="anthropic" (
+            set "API_BASE_URL=https://api.anthropic.com"
+        ) else (
+            set "API_BASE_URL=https://api.openai.com"
+        )
+    )
+
+    set /p API_MODEL="  输入模型名 (默认 !API_MODEL!): "
+    if "!API_MODEL!"=="" (
+        if /i "!API_FORMAT!"=="anthropic" (
+            set "API_MODEL=claude-sonnet-4-20250514"
+        ) else (
+            set "API_MODEL=gpt-4o-mini"
+        )
+    )
+
+    set "API_KEY="
+    set /p API_KEY="  输入 API Key: "
 ) else (
     set "JP_TOOL_LLM=off"
 )

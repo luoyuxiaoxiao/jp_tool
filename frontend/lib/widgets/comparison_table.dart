@@ -35,8 +35,9 @@ class ComparisonTable extends StatelessWidget {
               color: Colors.deepPurple.withAlpha(60),
               borderRadius: BorderRadius.circular(4),
             ),
-            child: Text(group.category,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            child: Text(_categoryZh(group.category),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           ),
           const SizedBox(height: 6),
           Table(
@@ -66,6 +67,15 @@ class ComparisonTable extends StatelessWidget {
       ),
     );
   }
+
+  String _categoryZh(String category) {
+    final c = category.toLowerCase();
+    if (c.contains('culture')) return '文化语境';
+    if (c.contains('condition')) return '条件表达差异';
+    if (c.contains('emotion') || c.contains('psycholog')) return '心理变化表达';
+    if (c.contains('honorific') || c.contains('polite')) return '敬语与礼貌表达';
+    return category;
+  }
 }
 
 class _Cell extends StatelessWidget {
@@ -78,7 +88,7 @@ class _Cell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(6),
-      child: Text(
+      child: SelectableText(
         text,
         style: TextStyle(
           fontSize: 13,
