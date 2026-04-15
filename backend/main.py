@@ -14,7 +14,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 
-from analyzer.tokenizer import tokenize_to_models
 from analyzer.models import BasicResult, DeepResult
 from capture.http_receiver import router as http_router, set_callback
 
@@ -719,15 +718,14 @@ async def on_new_text(text: str):
     """Handle new text from clipboard or HTTP push."""
     logger.info("New text: %s", text[:60])
 
-    # Phase 1: local tokenization + grammar matching (fast)
+    # Phase 1: local grammar matching (no tokenization/dictionary required)
     tokens = []
     grammar_matches = []
     try:
-        tokens = tokenize_to_models(text)
         from analyzer.grammar_db import match_grammar
         grammar_matches = match_grammar(text, tokens)
     except Exception as e:
-        logger.error("Tokenization failed, fallback to deep-analysis-only mode: %s", e)
+        logger.error("Local grammar matching failed, fallback to deep-analysis-only mode: %s", e)
 
     basic = BasicResult(
         text=text,

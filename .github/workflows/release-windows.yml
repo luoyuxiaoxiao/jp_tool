@@ -40,7 +40,7 @@ jobs:
           Set-StrictMode -Version Latest
           python -m pip install --upgrade pip
           python -m pip install nuitka ordered-set zstandard
-          python -m pip install fastapi "uvicorn[standard]" websockets fugashi unidic-lite pydantic httpx pyperclip
+          python -m pip install fastapi "uvicorn[standard]" websockets pydantic httpx pyperclip
 
       - name: Build backend with Nuitka (slim standalone)
         shell: pwsh
@@ -57,17 +57,9 @@ jobs:
             --include-package=fastapi `
             --include-package=uvicorn `
             --include-package=websockets `
-            --include-package=fugashi `
-            --include-package=unidic_lite `
             --include-package=pydantic `
             --include-package=httpx `
             --nofollow-import-to=pytest,tkinter,matplotlib,IPython,numpy,pandas,torch,tensorflow
-
-      - name: Copy UniDic-lite dictionary into backend dist
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          python -c "import pathlib, shutil, unidic_lite; src=pathlib.Path(unidic_lite.DICDIR); dst1=pathlib.Path(r'build/nuitka/main.dist/dicdir'); dst2=pathlib.Path(r'build/nuitka/main.dist/unidic_lite/dicdir'); shutil.copytree(src, dst1, dirs_exist_ok=True); shutil.copytree(src, dst2, dirs_exist_ok=True)"
 
       - name: Assemble release bundle
         shell: pwsh
@@ -86,8 +78,6 @@ jobs:
           # Strip debug symbols to reduce release zip size.
           Get-ChildItem -Path $packageRoot -Recurse -Include *.pdb,*.ilk,*.exp,*.lib -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
-
-          python -c "import pathlib, shutil, unidic_lite; src=pathlib.Path(unidic_lite.DICDIR); dst=pathlib.Path(r'build/package/resources/backend/dicdir'); shutil.copytree(src, dst, dirs_exist_ok=True)"
 
           $zipPath = "build/jp_tool-${{ github.ref_name }}-windows.zip"
           Remove-Item -Force $zipPath -ErrorAction SilentlyContinue

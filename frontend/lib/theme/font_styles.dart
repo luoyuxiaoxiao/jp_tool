@@ -6,10 +6,7 @@ const String kZhPrimaryFamily = 'LXGWWenKaiScreen';
 const String kJaPrimaryFamily = 'KleeOne';
 
 const List<String> _commonFallback = [
-  'LXGWWenKaiGBScreen',
   'KleeOne',
-  'ReggaeOne',
-  'RampartOne',
   'Noto Sans CJK SC',
   'Noto Sans CJK JP',
   'Microsoft YaHei UI',
@@ -19,10 +16,7 @@ const List<String> _commonFallback = [
 ];
 
 const List<String> _japaneseFallback = [
-  'ReggaeOne',
-  'RampartOne',
   'LXGWWenKaiScreen',
-  'LXGWWenKaiGBScreen',
   'Noto Sans CJK JP',
   'Yu Gothic UI',
   'Microsoft YaHei UI',
@@ -78,9 +72,8 @@ TextStyle jaTextStyle(
   Color? decorationColor,
   double? decorationThickness,
 }) {
-  final family = decorative ? 'ReggaeOne' : kJaPrimaryFamily;
   return (base ?? const TextStyle()).copyWith(
-    fontFamily: family,
+    fontFamily: kJaPrimaryFamily,
     fontFamilyFallback: _japaneseFallback,
     fontSize: fontSize,
     fontWeight: fontWeight,

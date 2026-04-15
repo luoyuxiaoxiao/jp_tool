@@ -95,7 +95,7 @@ class _Cell extends StatelessWidget {
         style: cjkTextStyle(
           text,
           TextStyle(
-            fontSize: 13,
+            fontSize: header ? 15 : 14,
             fontWeight: header ? FontWeight.bold : FontWeight.normal,
             color: header ? Colors.amber : null,
           ),

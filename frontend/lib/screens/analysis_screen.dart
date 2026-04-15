@@ -8,7 +8,6 @@ import 'package:provider/provider.dart';
 import '../services/websocket_service.dart';
 import '../utils/shortcut_utils.dart';
 import '../widgets/grammar_highlight.dart';
-import '../widgets/word_card.dart';
 import '../widgets/core_grammar_view.dart';
 import '../widgets/sentence_breakdown.dart';
 import '../widgets/grammar_tree.dart';
@@ -347,8 +346,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           });
         }
 
-        final hasLocalDetails =
-            basic.tokens.isNotEmpty || basic.grammarMatches.isNotEmpty;
+        final hasLocalDetails = basic.grammarMatches.isNotEmpty;
         final hasDeepDetails = deep != null;
         final showNoDetailsHint =
             !state.isLoadingDeep && !hasLocalDetails && !hasDeepDetails;
@@ -363,7 +361,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 text: basic.text,
                 matches: basic.grammarMatches,
                 annotations: deep?.levelAnnotations ?? [],
-                tokens: basic.tokens,
               ),
               if (showNoDetailsHint) ...[
                 const SizedBox(height: 8),
@@ -377,16 +374,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                   child: const Text(
                     '已收到文本，但当前没有可展示的本地语法细节。\n'
-                    '请检查后端日志、词典状态或切换 LLM 配置后重试。',
+                    '请检查后端日志或切换 LLM 配置后重试。',
                     style: TextStyle(fontSize: 13, color: Colors.grey),
                   ),
                 ),
               ],
-              const SizedBox(height: 16),
-              WordCard(
-                tokens: basic.tokens,
-                wordMeanings: deep?.wordMeaningMap ?? const {},
-              ),
               const SizedBox(height: 16),
               if (state.isLoadingDeep && deep == null)
                 const Padding(

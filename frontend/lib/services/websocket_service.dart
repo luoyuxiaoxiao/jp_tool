@@ -666,10 +666,7 @@ class WebSocketService extends ChangeNotifier {
   Future<int?> _launchBackendProcess(String exePath, int port) async {
     try {
       _appendBackendLog('[frontend] launching backend exe: $exePath');
-      final environment = _buildBackendEnvironment(port, exePath);
-      _appendBackendLog(
-        '[frontend] JP_TOOL_DICDIR=${environment['JP_TOOL_DICDIR'] ?? '(not set)'}',
-      );
+      final environment = _buildBackendEnvironment(port);
       final process = await Process.start(
         exePath,
         const [],
@@ -742,7 +739,7 @@ class WebSocketService extends ChangeNotifier {
 
     _managedBackendPid = null;
     _managedBackendPort = null;
-    _reportBackendFailure('后端进程已退出，请检查字典目录或后端启动日志');
+    _reportBackendFailure('后端进程已退出，请检查后端启动日志');
   }
 
   Future<bool> _checkBackendReady(int port) async {
@@ -774,34 +771,12 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
-  Map<String, String> _buildBackendEnvironment(int port, String exePath) {
-    final env = <String, String>{
+  Map<String, String> _buildBackendEnvironment(int port) {
+    return <String, String>{
       ...Platform.environment,
       'JP_TOOL_PORT': '$port',
       'PYTHONUTF8': '1',
     };
-
-    final dicdir = _resolveDictionaryPath(exePath);
-    if (dicdir != null && dicdir.isNotEmpty) {
-      env['JP_TOOL_DICDIR'] = dicdir;
-    }
-    return env;
-  }
-
-  String? _resolveDictionaryPath(String exePath) {
-    final exeDir = File(exePath).parent.path;
-    final candidates = <String>[
-      '$exeDir\\dicdir',
-      '$exeDir\\resources\\backend\\dicdir',
-      '${Directory.current.path}\\resources\\backend\\dicdir',
-    ];
-
-    for (final path in candidates) {
-      if (Directory(path).existsSync()) {
-        return path;
-      }
-    }
-    return null;
   }
 
   String? _resolveBackendExecutablePath() {
