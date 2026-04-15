@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import '../models/analysis_result.dart';
+import '../theme/font_styles.dart';
 
 class CommonMistakesView extends StatelessWidget {
   final List<CommonMistake> mistakes;
@@ -40,26 +41,41 @@ class CommonMistakesView extends StatelessWidget {
               const Icon(Icons.close, color: Colors.redAccent, size: 16),
               const SizedBox(width: 4),
               Expanded(
-                child: Text(m.wrong,
-                    style: const TextStyle(
-                        color: Colors.redAccent,
-                        decoration: TextDecoration.lineThrough,
-                        fontSize: 14)),
+                child: Text(
+                  m.wrong,
+                  style: cjkTextStyle(
+                    m.wrong,
+                    const TextStyle(
+                      color: Colors.redAccent,
+                      decoration: TextDecoration.lineThrough,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
           Padding(
             padding: const EdgeInsets.only(left: 20, top: 2),
-            child: Text('问题：${m.problem}',
-                style: TextStyle(fontSize: 12, color: Colors.grey[400])),
+            child: Text(
+              '问题：${m.problem}',
+              style: zhTextStyle(
+                TextStyle(fontSize: 12, color: Colors.grey[400]),
+              ),
+            ),
           ),
           Row(
             children: [
               const Icon(Icons.check, color: Colors.greenAccent, size: 16),
               const SizedBox(width: 4),
               Expanded(
-                child: Text(m.correct,
-                    style: const TextStyle(color: Colors.greenAccent, fontSize: 14)),
+                child: Text(
+                  m.correct,
+                  style: cjkTextStyle(
+                    m.correct,
+                    const TextStyle(color: Colors.greenAccent, fontSize: 14),
+                  ),
+                ),
               ),
             ],
           ),

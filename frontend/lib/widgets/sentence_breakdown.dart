@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import '../models/analysis_result.dart';
+import '../theme/font_styles.dart';
 
 class SentenceBreakdown extends StatelessWidget {
   final List<SentenceComponent> components;
@@ -27,29 +28,58 @@ class SentenceBreakdown extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (!isLast) const Text('+ ', style: TextStyle(color: Colors.grey, fontSize: 16)),
-                if (isLast) const Text('= ', style: TextStyle(color: Colors.amber, fontSize: 16)),
+                if (!isLast)
+                  const Text('+ ',
+                      style: TextStyle(color: Colors.grey, fontSize: 16)),
+                if (isLast)
+                  const Text('= ',
+                      style: TextStyle(color: Colors.amber, fontSize: 16)),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.white10,
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: Text(
-                    c.fragment,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (c.reading.trim().isNotEmpty)
+                        Text(
+                          kataToHira(c.reading),
+                          style: jaTextStyle(
+                            const TextStyle(),
+                            fontSize: 10,
+                            color: Colors.grey[300],
+                          ),
+                        ),
+                      Text(
+                        c.fragment,
+                        style: cjkTextStyle(
+                          c.fragment,
+                          const TextStyle(),
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     border: Border.all(color: Colors.grey),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     c.role,
-                    style: TextStyle(fontSize: 13, color: Colors.grey[300]),
+                    style: zhTextStyle(
+                      const TextStyle(),
+                      fontSize: 13,
+                      color: Colors.grey[300],
+                    ),
                   ),
                 ),
               ],

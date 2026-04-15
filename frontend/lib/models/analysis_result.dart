@@ -139,6 +139,21 @@ class GrammarPoint {
       );
 }
 
+class WordMeaning {
+  final String word;
+  final String meaningZh;
+
+  const WordMeaning({
+    required this.word,
+    this.meaningZh = '',
+  });
+
+  factory WordMeaning.fromJson(Map<String, dynamic> j) => WordMeaning(
+        word: j['word'] ?? '',
+        meaningZh: j['meaning_zh'] ?? '',
+      );
+}
+
 class SentenceComponent {
   final String fragment;
   final String role;
@@ -256,6 +271,7 @@ class LevelAnnotation {
 class DeepResult {
   final String text;
   final List<GrammarPoint> coreGrammar;
+  final List<WordMeaning> wordMeanings;
   final List<SentenceComponent> sentenceBreakdown;
   final List<GrammarTreeNode> grammarTree;
   final List<ComparisonGroup> comparisons;
@@ -267,6 +283,7 @@ class DeepResult {
   const DeepResult({
     required this.text,
     this.coreGrammar = const [],
+    this.wordMeanings = const [],
     this.sentenceBreakdown = const [],
     this.grammarTree = const [],
     this.comparisons = const [],
@@ -280,6 +297,10 @@ class DeepResult {
         text: j['text'] ?? '',
         coreGrammar: (j['core_grammar'] as List?)
                 ?.map((g) => GrammarPoint.fromJson(g))
+                .toList() ??
+            [],
+        wordMeanings: (j['word_meanings'] as List?)
+                ?.map((w) => WordMeaning.fromJson(w))
                 .toList() ??
             [],
         sentenceBreakdown: (j['sentence_breakdown'] as List?)
@@ -307,6 +328,17 @@ class DeepResult {
                 .toList() ??
             [],
       );
+
+  Map<String, String> get wordMeaningMap {
+    final map = <String, String>{};
+    for (final item in wordMeanings) {
+      final key = item.word.trim();
+      final value = item.meaningZh.trim();
+      if (key.isEmpty || value.isEmpty) continue;
+      map.putIfAbsent(key, () => value);
+    }
+    return map;
+  }
 }
 
 // ── Combined analysis state ─────────────────────────────────────────────────

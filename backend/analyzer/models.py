@@ -41,6 +41,12 @@ class SentenceComponent(BaseModel):
     reading: str = ""
 
 
+class WordMeaning(BaseModel):
+    """Optional Chinese meaning for an important word/phrase in the text."""
+    word: str
+    meaning_zh: str = ""
+
+
 class GrammarPoint(BaseModel):
     """A core grammar analysis point."""
     grammar: str
@@ -91,6 +97,7 @@ class DeepResult(BaseModel):
     type: str = "deep_result"
     text: str
     core_grammar: list[GrammarPoint] = []
+    word_meanings: list[WordMeaning] = []
     sentence_breakdown: list[SentenceComponent] = []
     grammar_tree: list[GrammarTreeNode] = []
     comparisons: list[ComparisonGroup] = []

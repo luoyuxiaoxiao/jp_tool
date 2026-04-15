@@ -7,6 +7,7 @@ Supports two wire formats:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -183,42 +184,84 @@ class ApiProvider(BaseLLMProvider):
         return await self._call_openai(prompt)
 
     async def _call_openai(self, prompt: str) -> str:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                self._url("v1/chat/completions"),
-                headers=self._auth_headers(),
-                json={
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 4096,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        last_error: Exception | None = None
+        retriable_status = {408, 409, 425, 429, 500, 502, 503, 504}
 
-        choices = data.get("choices", []) if isinstance(data, dict) else []
-        if not choices:
-            raise RuntimeError("API response has no choices")
+        for attempt in range(2):
+            request_timeout = self.timeout if attempt == 0 else max(self.timeout, 60.0)
+            try:
+                async with httpx.AsyncClient(timeout=request_timeout) as client:
+                    resp = await client.post(
+                        self._url("v1/chat/completions"),
+                        headers=self._auth_headers(),
+                        json={
+                            "model": self.model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": 0.3,
+                            "max_tokens": 4096,
+                        },
+                    )
 
-        message = choices[0].get("message", {})
-        content = message.get("content", "")
+                    if resp.status_code in retriable_status and attempt == 0:
+                        preview = (resp.text or "").strip().replace("\n", " ")[:200]
+                        logger.warning(
+                            "API transient HTTP %d, retrying once: %s",
+                            resp.status_code,
+                            preview,
+                        )
+                        await asyncio.sleep(0.8)
+                        continue
 
-        if isinstance(content, str):
-            return content
+                    resp.raise_for_status()
+                    data = resp.json()
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as e:
+                last_error = e
+                logger.warning("API transient error on attempt %d/2: %s", attempt + 1, e)
+                if attempt == 0:
+                    await asyncio.sleep(0.8)
+                    continue
+                break
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                status = e.response.status_code
+                preview = (e.response.text or "").strip().replace("\n", " ")[:220]
+                if attempt == 0 and status in retriable_status:
+                    logger.warning("API transient HTTP %d, retrying once: %s", status, preview)
+                    await asyncio.sleep(0.8)
+                    continue
+                raise RuntimeError(f"API HTTP {status}: {preview or 'request failed'}") from e
+            except Exception as e:
+                last_error = e
+                logger.warning("API unexpected error on attempt %d/2: %s", attempt + 1, e)
+                if attempt == 0:
+                    await asyncio.sleep(0.8)
+                    continue
+                break
 
-        # Some APIs return content as blocks.
-        if isinstance(content, list):
-            chunks = []
-            for item in content:
-                if isinstance(item, dict):
-                    text = item.get("text")
-                    if text:
-                        chunks.append(str(text))
-            if chunks:
-                return "\n".join(chunks)
+            choices = data.get("choices", []) if isinstance(data, dict) else []
+            if not choices:
+                raise RuntimeError("API response has no choices")
 
-        raise RuntimeError("API response content format unsupported")
+            message = choices[0].get("message", {})
+            content = message.get("content", "")
+
+            if isinstance(content, str):
+                return content
+
+            # Some APIs return content as blocks.
+            if isinstance(content, list):
+                chunks = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get("text")
+                        if text:
+                            chunks.append(str(text))
+                if chunks:
+                    return "\n".join(chunks)
+
+            raise RuntimeError("API response content format unsupported")
+
+        raise RuntimeError(f"API request failed after retries: {last_error}")
 
     async def _call_anthropic(self, prompt: str) -> str:
         async with httpx.AsyncClient(timeout=self.timeout) as client:

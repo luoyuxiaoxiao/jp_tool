@@ -10,9 +10,11 @@ from abc import ABC, abstractmethod
 from analyzer.models import (
     DeepResult, GrammarPoint, SentenceComponent, GrammarTreeNode,
     ComparisonGroup, ComparisonItem, CommonMistake, LevelAnnotation,
+    WordMeaning,
 )
 
 logger = logging.getLogger(__name__)
+_PARSE_FALLBACK_PREFIX = "LLM返回内容不是有效JSON"
 
 
 class BaseLLMProvider(ABC):
@@ -30,10 +32,29 @@ class BaseLLMProvider(ABC):
 
         try:
             raw = await self._call(prompt)
-            return self._parse_response(text, raw)
+            parsed = self._parse_response(text, raw)
+
+            # If provider returned rich but non-JSON text, try one repair pass.
+            if self._is_parse_fallback(parsed):
+                logger.warning("Primary LLM output parse failed, retrying with JSON repair prompt")
+                try:
+                    repaired_raw = await self._call(self._build_repair_prompt(text, raw))
+                    repaired = self._parse_response(text, repaired_raw)
+                    if not self._is_parse_fallback(repaired):
+                        return repaired
+                    # Keep the richer fallback body if both attempts fail.
+                    if len(repaired.cultural_context) > len(parsed.cultural_context):
+                        return repaired
+                except Exception as repair_error:
+                    logger.warning("JSON repair retry failed: %s", repair_error)
+
+            return parsed
         except Exception as e:
-            logger.error("LLM analysis failed: %s", e)
-            return None
+            logger.exception("LLM analysis failed")
+            return DeepResult(
+                text=text,
+                cultural_context=f"深度分析暂时失败：{e}",
+            )
 
     def _parse_response(self, text: str, raw: str) -> DeepResult:
         """Parse LLM JSON response into DeepResult model.
@@ -63,7 +84,28 @@ class BaseLLMProvider(ABC):
         logger.debug("Raw response preview: %s", raw[:500])
         return DeepResult(
             text=text,
-            cultural_context="LLM返回内容不是有效JSON，已保留原始文本片段。\n" + raw[:500],
+            cultural_context=(
+                f"{_PARSE_FALLBACK_PREFIX}，已保留原始文本片段。\n"
+                + raw[:1800]
+            ),
+        )
+
+    def _is_parse_fallback(self, result: DeepResult) -> bool:
+        return result.cultural_context.startswith(_PARSE_FALLBACK_PREFIX)
+
+    def _build_repair_prompt(self, text: str, raw: str) -> str:
+        raw_excerpt = (raw or "").strip()
+        if len(raw_excerpt) > 9000:
+            raw_excerpt = raw_excerpt[:9000]
+
+        return (
+            "你是JSON修复助手。请把下面的分析内容转换为一个合法JSON对象，只输出JSON，不要任何解释。\n"
+            "字段名必须完全使用这些键：core_grammar, word_meanings, sentence_breakdown, grammar_tree, comparisons, common_mistakes, cultural_context, applications, level_annotations。\n"
+            "如果某个字段无法提取，使用空数组或空字符串。\n"
+            "其中说明性文字必须使用简体中文，日文表达保留日文。\n"
+            f"原句：{text}\n"
+            "待修复内容如下：\n"
+            f"{raw_excerpt}"
         )
 
     def _build_parse_candidates(self, raw: str) -> list[str]:
@@ -220,6 +262,7 @@ class BaseLLMProvider(ABC):
         return DeepResult(
             text=text,
             core_grammar=self._safe_list(data, "core_grammar", GrammarPoint),
+            word_meanings=self._safe_list(data, "word_meanings", WordMeaning),
             sentence_breakdown=self._safe_list(data, "sentence_breakdown", SentenceComponent),
             grammar_tree=self._safe_list(data, "grammar_tree", GrammarTreeNode),
             comparisons=self._safe_comparisons(data.get("comparisons", [])),

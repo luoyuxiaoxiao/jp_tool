@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import '../models/analysis_result.dart';
+import '../theme/font_styles.dart';
 
 class ComparisonTable extends StatelessWidget {
   final List<ComparisonGroup> groups;
@@ -36,8 +37,9 @@ class ComparisonTable extends StatelessWidget {
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(_categoryZh(group.category),
-                style:
-                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                style: zhTextStyle(
+                  const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                )),
           ),
           const SizedBox(height: 6),
           Table(
@@ -90,11 +92,16 @@ class _Cell extends StatelessWidget {
       padding: const EdgeInsets.all(6),
       child: SelectableText(
         text,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: header ? FontWeight.bold : FontWeight.normal,
-          color: header ? Colors.amber : null,
+        style: cjkTextStyle(
+          text,
+          TextStyle(
+            fontSize: 13,
+            fontWeight: header ? FontWeight.bold : FontWeight.normal,
+            color: header ? Colors.amber : null,
+          ),
+          decorativeJapanese: header,
         ),
+        textDirection: TextDirection.ltr,
       ),
     );
   }

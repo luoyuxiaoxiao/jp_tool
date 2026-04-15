@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import '../models/analysis_result.dart';
+import '../theme/font_styles.dart';
 
 class GrammarTree extends StatelessWidget {
   final List<GrammarTreeNode> nodes;
@@ -42,16 +43,25 @@ class GrammarTree extends StatelessWidget {
               children: [
                 TextSpan(
                   text: prefix,
-                  style: TextStyle(color: Colors.grey[600], fontFamily: 'monospace'),
+                  style: TextStyle(
+                      color: Colors.grey[600], fontFamily: 'monospace'),
                 ),
                 TextSpan(
                   text: node.label,
-                  style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w600),
+                  style: cjkTextStyle(
+                    node.label,
+                    TextStyle(
+                        color: color,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600),
+                  ),
                 ),
                 if (node.note.isNotEmpty)
                   TextSpan(
                     text: '  (${node.note})',
-                    style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                    style: zhTextStyle(
+                      TextStyle(color: Colors.grey[500], fontSize: 12),
+                    ),
                   ),
               ],
             ),

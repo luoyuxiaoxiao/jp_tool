@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import '../models/analysis_result.dart';
 import 'jlpt_colors.dart';
+import '../theme/font_styles.dart';
 
 class CoreGrammarView extends StatelessWidget {
   final List<GrammarPoint> points;
@@ -39,9 +40,17 @@ class CoreGrammarView extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('($index) ', style: TextStyle(color: Colors.grey[400], fontSize: 14)),
-              Text(p.grammar,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              Text('($index) ',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 14)),
+              Text(
+                p.grammar,
+                style: cjkTextStyle(
+                  p.grammar,
+                  const TextStyle(),
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -49,8 +58,14 @@ class CoreGrammarView extends StatelessWidget {
                   color: color,
                   borderRadius: BorderRadius.circular(3),
                 ),
-                child:
-                    Text(p.level, style: const TextStyle(fontSize: 11, color: Colors.white)),
+                child: Text(
+                  p.level,
+                  style: zhTextStyle(
+                    const TextStyle(),
+                    fontSize: 11,
+                    color: Colors.white,
+                  ),
+                ),
               ),
             ],
           ),
@@ -77,9 +92,15 @@ class CoreGrammarView extends StatelessWidget {
       children: [
         SizedBox(
           width: 75,
-          child: Text('$label:', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+          child: Text('$label:',
+              style: TextStyle(color: Colors.grey[500], fontSize: 12)),
         ),
-        Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+        Expanded(
+          child: Text(
+            value,
+            style: cjkTextStyle(value, const TextStyle(), fontSize: 13),
+          ),
+        ),
       ],
     );
   }

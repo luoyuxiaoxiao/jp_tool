@@ -1,0 +1,99 @@
+name: Release Windows Bundle
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Flutter build windows
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          cd frontend
+          flutter pub get
+          flutter build windows --release
+
+      - name: Install Python build dependencies
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          python -m pip install --upgrade pip
+          python -m pip install nuitka ordered-set zstandard
+          python -m pip install fastapi "uvicorn[standard]" websockets fugashi unidic-lite pydantic httpx pyperclip
+
+      - name: Build backend with Nuitka (slim standalone)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          python -m nuitka backend/main.py `
+            --standalone `
+            --assume-yes-for-downloads `
+            --remove-output `
+            --output-dir=build/nuitka `
+            --output-filename=jp_backend.exe `
+            --windows-console-mode=disable `
+            --follow-import-to=analyzer,capture,llm,storage `
+            --include-package=fastapi `
+            --include-package=uvicorn `
+            --include-package=websockets `
+            --include-package=fugashi `
+            --include-package=unidic_lite `
+            --include-package=pydantic `
+            --include-package=httpx `
+            --nofollow-import-to=pytest,tkinter,matplotlib,IPython,numpy,pandas,torch,tensorflow
+
+      - name: Copy UniDic-lite dictionary into backend dist
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          python -c "import pathlib, shutil, unidic_lite; src=pathlib.Path(unidic_lite.DICDIR); dst1=pathlib.Path(r'build/nuitka/main.dist/dicdir'); dst2=pathlib.Path(r'build/nuitka/main.dist/unidic_lite/dicdir'); shutil.copytree(src, dst1, dirs_exist_ok=True); shutil.copytree(src, dst2, dirs_exist_ok=True)"
+
+      - name: Assemble release bundle
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $packageRoot = "build/package"
+          $backendRoot = Join-Path $packageRoot "resources/backend"
+          $distRoot = "build/nuitka/main.dist"
+
+          Remove-Item -Recurse -Force $packageRoot -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $backendRoot | Out-Null
+
+          Copy-Item -Recurse -Force "frontend/build/windows/x64/runner/Release/*" $packageRoot
+          Copy-Item -Recurse -Force "$distRoot/*" $backendRoot
+
+          # Strip debug symbols to reduce release zip size.
+          Get-ChildItem -Path $packageRoot -Recurse -Include *.pdb,*.ilk,*.exp,*.lib -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+          python -c "import pathlib, shutil, unidic_lite; src=pathlib.Path(unidic_lite.DICDIR); dst=pathlib.Path(r'build/package/resources/backend/dicdir'); shutil.copytree(src, dst, dirs_exist_ok=True)"
+
+          $zipPath = "build/jp_tool-${{ github.ref_name }}-windows.zip"
+          Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$packageRoot/*" -DestinationPath $zipPath
+
+      - name: Upload zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/jp_tool-${{ github.ref_name }}-windows.zip

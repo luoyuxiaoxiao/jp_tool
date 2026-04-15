@@ -280,6 +280,12 @@ async def grammar_stats():
     return get_stats()
 
 
+@app.get("/api/grammar/stats")
+async def grammar_stats_alias():
+    """Alias for grammar DB statistics."""
+    return await grammar_stats()
+
+
 @app.post("/api/analyze")
 async def analyze_text(body: dict):
     """Manually trigger analysis via REST (useful for testing)."""
@@ -324,7 +330,7 @@ async def llm_config_get():
         "api_base_url": os.environ.get("API_BASE_URL", settings.get("API_BASE_URL", "https://api.openai.com")),
         "api_model": os.environ.get("API_MODEL", settings.get("API_MODEL", "gpt-4o-mini")),
         "api_key": os.environ.get("API_KEY", settings.get("API_KEY", "")),
-        "api_timeout": os.environ.get("API_TIMEOUT", settings.get("API_TIMEOUT", "30")),
+        "api_timeout": os.environ.get("API_TIMEOUT", settings.get("API_TIMEOUT", "60")),
     }
 
 
@@ -442,7 +448,7 @@ async def llm_models(body: dict):
 
     timeout_text = str(
         body.get("api_timeout")
-        or os.environ.get("API_TIMEOUT", settings.get("API_TIMEOUT", "30"))
+        or os.environ.get("API_TIMEOUT", settings.get("API_TIMEOUT", "60"))
     ).strip()
     try:
         timeout = max(5.0, float(timeout_text))
@@ -714,10 +720,14 @@ async def on_new_text(text: str):
     logger.info("New text: %s", text[:60])
 
     # Phase 1: local tokenization + grammar matching (fast)
-    tokens = tokenize_to_models(text)
-
-    from analyzer.grammar_db import match_grammar
-    grammar_matches = match_grammar(text, tokens)
+    tokens = []
+    grammar_matches = []
+    try:
+        tokens = tokenize_to_models(text)
+        from analyzer.grammar_db import match_grammar
+        grammar_matches = match_grammar(text, tokens)
+    except Exception as e:
+        logger.error("Tokenization failed, fallback to deep-analysis-only mode: %s", e)
 
     basic = BasicResult(
         text=text,
@@ -747,17 +757,35 @@ async def _deep_analysis(text: str):
         result = await provider.analyze(text)
         if result:
             await broadcast(result.model_dump_json())
-            await asyncio.to_thread(upsert_deep_result, text, result.model_dump_json())
-            # Auto-learn new grammar patterns from LLM output
-            from analyzer.grammar_db import learn_from_deep_result
-            n = learn_from_deep_result(result)
-            if n > 0:
-                logger.info("Auto-learned %d new grammar patterns", n)
+
+            try:
+                await asyncio.to_thread(upsert_deep_result, text, result.model_dump_json())
+            except Exception as persist_error:
+                logger.warning("Persist deep result failed: %s", persist_error)
+
+            # Auto-learn failure should not mask a successful deep analysis response.
+            try:
+                from analyzer.grammar_db import learn_from_deep_result
+                n = learn_from_deep_result(result)
+                if n > 0:
+                    logger.info("Auto-learned %d new grammar patterns", n)
+            except Exception as learn_error:
+                logger.warning("Auto-learn skipped due error: %s", learn_error)
         else:
-            await broadcast(DeepResult(text=text).model_dump_json())
+            await broadcast(
+                DeepResult(
+                    text=text,
+                    cultural_context="深度分析返回为空，请稍后重试。",
+                ).model_dump_json()
+            )
     except Exception as e:
-        logger.error("Deep analysis failed: %s", e)
-        await broadcast(DeepResult(text=text).model_dump_json())
+        logger.exception("Deep analysis failed for text: %s", text[:80])
+        await broadcast(
+            DeepResult(
+                text=text,
+                cultural_context=f"深度分析失败：{e}",
+            ).model_dump_json()
+        )
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────

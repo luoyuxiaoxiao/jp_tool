@@ -17,6 +17,12 @@ ANALYSIS_PROMPT = """\
 4. 以下字段保留日文内容：
    grammar, fragment, expression, wrong, correct, example
 5. level 只能使用 N1/N2/N3/N4/N5 之一。
+6. 可选返回词语释义字段 word_meanings（数组），仅在有把握时提供；meaning_zh 必须是简体中文。
+7. 请尽量提供更完整、可教学的中文解释，避免过度简短：
+  - core_grammar 建议 2-4 条，function 尽量写成完整中文句（建议 >=20 字）
+  - sentence_breakdown 建议覆盖整句（通常 >=4 段）
+  - comparisons 建议至少 1 组且每组 >=2 条（确实无可比时可为空）
+  - cultural_context 如有内容，尽量给出更具体中文说明（建议 >=60 字）
 
 输出 JSON 结构（字段名必须完全一致）：
 {{
@@ -27,6 +33,12 @@ ANALYSIS_PROMPT = """\
       "function": "功能说明（简体中文）",
       "comparison": "与近义语法对比（简体中文）",
       "level": "N1"
+    }}
+  ],
+  "word_meanings": [
+    {{
+      "word": "词语或短语（日文原文）",
+      "meaning_zh": "简体中文释义（尽量具体）"
     }}
   ],
   "sentence_breakdown": [

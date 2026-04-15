@@ -14,14 +14,19 @@ AI写的，之后会自己整理重新写一份
 
 ### 1. 前端托管后端进程
 
-Flutter 前端可通过 dart:io Process 启动后端 EXE（隐藏窗口），并记录托管进程 PID。
+Flutter 前端通过静默派生方式异步拉起内置后端 EXE，并记录托管进程 PID/端口：
+
+- 固定相对路径加载（发布目录内置），不再暴露后端路径输入
+- 前端秒开，后端异步启动并自动重连
+- 启动后可在设置页查看托管状态与端口
 
 设置页支持：
 
 - 自动启动后端开关
-- 后端 EXE 路径保存
+- 窗口材质效果切换（Transparent/Acrylic/Mica 等）
 - 手动启动/停止后端
 - 显示托管进程 PID 与实际端口
+- 后端日志开关与日志面板（stdout/stderr）
 
 ### 2. 动态端口回退（已实现）
 
@@ -52,11 +57,17 @@ Flutter 前端可通过 dart:io Process 启动后端 EXE（隐藏窗口），并
 
 - 本地分析：
   - MeCab/fugashi 分词
-  - 假名读音
+  - 日文注音（furigana 风格展示）
   - JLPT 语法匹配
 - 深度分析（可选）：
   - Ollama / 通用 API
   - 核心语法、句子分解、常见错误等
+- 字体与排版：
+  - 中文主字体：LXGW WenKai Screen（霞鹜文楷屏幕阅读版）
+  - 日文字体优先：Klee，回退 Reggae、Rampart
+  - 多语言 Font Fallback 防止中日混排字形漂移/豆腐块
+- 桌面视觉：
+  - flutter_acrylic 原生窗口材质，默认 Transparent
 - 运行时配置：
   - 剪贴板监听开关
   - 语法自动学习开关
@@ -86,9 +97,9 @@ jp_tool/
 ### A. 桌面端（推荐）
 
 1. 打开 Flutter 桌面应用。
-2. 在设置页填写后端 EXE 路径（可选，若默认路径可命中可不填）。
-3. 开启“启动前端时自动拉起后端”。
-4. 前端会自动选择可用端口并连接。
+2. 开启“启动前端时自动拉起后端”。
+3. 前端会静默异步拉起内置后端，并自动选择可用端口连接。
+4. 如需排查，打开“启用后端日志”查看 stdout/stderr。
 
 ### B. 脚本启动后端（兼容）
 
@@ -114,7 +125,7 @@ jp_tool/
 
 请优先检查：
 
-- EXE 路径是否正确
+- 发布目录内置后端文件是否存在
 - 杀软是否拦截
 - 备用端口是否全部被占用
 
@@ -124,6 +135,40 @@ jp_tool/
 
 ---
 
+## 字体与开源引用
+
+项目当前使用以下开源字体（已本地打包到 Flutter 资产）：
+
+- LXGW WenKai Screen / 霞鹜文楷屏幕阅读版
+  - 仓库：https://github.com/lxgw/LxgwWenKai-Screen
+  - 许可证：SIL Open Font License 1.1
+- Klee One
+  - 来源：https://fonts.google.com/specimen/Klee+One
+  - 许可证：SIL Open Font License 1.1
+- Reggae One
+  - 来源：https://fonts.google.com/specimen/Reggae+One
+  - 许可证：SIL Open Font License 1.1
+- Rampart One
+  - 来源：https://fonts.google.com/specimen/Rampart+One
+  - 许可证：SIL Open Font License 1.1
+
+---
+
+## CI/CD 自动发布
+
+已提供 GitHub Actions 工作流：
+
+- 文件：.github/workflows/release-windows.yml
+- 触发：推送新 tag（v*）
+- 动作：
+  - Flutter build windows --release
+  - Nuitka 打包 Python 后端（精简导入、禁用控制台窗口）
+  - 外置复制词典目录（resources/backend/dicdir）
+  - 组装完整发布目录并压缩为 zip
+  - 自动上传到 GitHub Release
+
+---
+
 ## 备注
 
-README 已按当前代码状态更新。若后续新增“发布打包流水线”（自动组装 Flutter Release + 后端 EXE），请再补一节“发布目录结构与分发步骤”。
+README 已同步到当前桌面发布策略。后续如调整 Nuitka 参数或发布目录结构，请同步更新 workflow 与本节说明。

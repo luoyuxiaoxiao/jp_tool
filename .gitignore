@@ -29,6 +29,23 @@ pip-wheel-metadata/
 backend/build/
 backend/dist/
 backend/*.spec
+build/
+
+# Nuitka local outputs
+backend/*.build/
+backend/*.dist/
+backend/*.onefile-build/
+backend/*.onefile-temp/
+
+# Local release/binary artifacts
+*.exe
+*.pdb
+*.dll
+*.zip
+*.7z
+*.msi
+*.bat
+*.cmd
 
 # Optional local MeCab/UniDic dictionaries (large, re-downloadable)
 backend/data/unidic_lite/

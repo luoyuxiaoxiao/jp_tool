@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/analysis_result.dart';
@@ -126,14 +127,22 @@ class ShortcutConfig {
 
 class WebSocketService extends ChangeNotifier {
   static const int _defaultBackendPort = 8765;
-  static const List<int> _fallbackBackendPorts = [18765, 28675, 38575, 47865];
+  static const List<String> _windowEffectValues = [
+    'transparent',
+    'mica',
+    'disabled',
+  ];
+  static const int _maxBackendLogLines = 600;
+
   static const int _defaultHistoryLimit = 100;
   static const int _minHistoryLimit = 20;
   static const int _maxHistoryLimit = 500;
   static const String _historyStorageKey = 'jp_history_items_v1';
   static const String _historyLimitStorageKey = 'jp_history_limit_v1';
   static const String _backendAutoStartStorageKey = 'jp_backend_autostart_v1';
-  static const String _backendExePathStorageKey = 'jp_backend_exe_path_v1';
+  static const String _backendLogEnabledStorageKey =
+      'jp_backend_log_enabled_v1';
+  static const String _windowEffectStorageKey = 'jp_window_effect_v1';
 
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
@@ -145,10 +154,16 @@ class WebSocketService extends ChangeNotifier {
   bool _clipboardEnabled = true;
   bool _grammarAutoLearnEnabled = true;
   bool _autoStartBackend = true;
-  String _backendExecutablePath = '';
   int? _managedBackendPid;
   int? _managedBackendPort;
   String? _managedBackendError;
+  Process? _managedBackendProcess;
+  StreamSubscription<String>? _backendStdoutSub;
+  StreamSubscription<String>? _backendStderrSub;
+  bool _backendLogEnabled = false;
+  final List<String> _backendLogs = [];
+  String _windowEffect = 'transparent';
+  bool _windowEffectInitialized = false;
   bool _startingManagedBackend = false;
   ShortcutConfig _shortcutConfig = const ShortcutConfig();
   int _historyLimit = _defaultHistoryLimit;
@@ -162,10 +177,13 @@ class WebSocketService extends ChangeNotifier {
   bool get clipboardEnabled => _clipboardEnabled;
   bool get grammarAutoLearnEnabled => _grammarAutoLearnEnabled;
   bool get autoStartBackend => _autoStartBackend;
-  String get backendExecutablePath => _backendExecutablePath;
   int? get managedBackendPid => _managedBackendPid;
   int? get managedBackendPort => _managedBackendPort;
   String? get managedBackendError => _managedBackendError;
+  bool get backendLogEnabled => _backendLogEnabled;
+  String get windowEffect => _windowEffect;
+  List<String> get windowEffectValues => List.unmodifiable(_windowEffectValues);
+  List<String> get backendLogs => List.unmodifiable(_backendLogs);
   bool get isManagedBackendRunning => _managedBackendPid != null;
   ShortcutConfig get shortcutConfig => _shortcutConfig;
   int get historyLimit => _historyLimit;
@@ -181,12 +199,32 @@ class WebSocketService extends ChangeNotifier {
   void connect({String? url}) {
     final trimmed = url?.trim();
     if (trimmed != null && trimmed.isNotEmpty) {
-      _serverUrl = trimmed;
+      final uri = Uri.tryParse(trimmed);
+      if (uri != null && _isLocalHost(uri.host)) {
+        _serverUrl = _localWsUrl(_defaultBackendPort);
+      } else {
+        _serverUrl = trimmed;
+      }
     }
 
     _shouldReconnect = true;
     _cancelReconnectTimer();
-    unawaited(_startManagedBackendIfNeeded());
+    unawaited(_bootstrapAndConnect());
+  }
+
+  Future<void> _bootstrapAndConnect() async {
+    if (kIsWeb || !Platform.isWindows) {
+      _startConnectionCycle();
+      return;
+    }
+
+    if (_autoStartBackend && _isLocalBackendTarget(_serverUrl)) {
+      await _startManagedBackendIfNeeded(force: true);
+      if (!_shouldReconnect) {
+        return;
+      }
+    }
+
     _startConnectionCycle();
   }
 
@@ -198,6 +236,7 @@ class WebSocketService extends ChangeNotifier {
   }
 
   void _startConnectionCycle() {
+    _cancelReconnectTimer();
     final token = ++_connectionToken;
     _closeChannel();
     _openChannel(token);
@@ -205,6 +244,7 @@ class WebSocketService extends ChangeNotifier {
 
   void _openChannel(int token) {
     try {
+      _cancelReconnectTimer();
       final channel = WebSocketChannel.connect(Uri.parse(_serverUrl));
       _channel = channel;
       _setConnected(true);
@@ -231,7 +271,19 @@ class WebSocketService extends ChangeNotifier {
 
     _channel = null;
     _setConnected(false);
-    unawaited(_startManagedBackendIfNeeded());
+    if (_managedBackendPid == null && _managedBackendPort == null) {
+      _reportBackendWarning(
+        '无法连接到后端，正在重试端口 8765（调试模式请先启动源码后端）',
+      );
+      _scheduleReconnect(token);
+      return;
+    }
+    if (_managedBackendPid != null) {
+      unawaited(_checkManagedBackendAliveAndReport());
+    }
+    if (_shouldReconnect) {
+      unawaited(_startManagedBackendIfNeeded());
+    }
     _scheduleReconnect(token);
   }
 
@@ -270,11 +322,19 @@ class WebSocketService extends ChangeNotifier {
   /// Send text for analysis via WebSocket.
   void sendText(String text) {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || _channel == null || !_connected) return;
+    if (trimmed.isEmpty) return;
+    if (_channel == null) {
+      _reportBackendWarning('当前连接不可用，正在重连后端，请稍后重试');
+      return;
+    }
 
     try {
       _channel!.sink.add(jsonEncode({'type': 'analyze', 'text': trimmed}));
-      _state = AnalysisState(isLoadingDeep: _llmEnabled);
+      // Optimistic preview avoids a blank result panel while waiting for backend.
+      _state = AnalysisState(
+        basic: BasicResult(text: trimmed),
+        isLoadingDeep: _llmEnabled,
+      );
       notifyListeners();
     } catch (e) {
       debugPrint('WebSocket send failed: $e');
@@ -417,10 +477,27 @@ class WebSocketService extends ChangeNotifier {
     await _saveBackendPrefs();
   }
 
-  Future<void> setBackendExecutablePath(String path) async {
-    _backendExecutablePath = path.trim();
+  Future<void> setBackendLogEnabled(bool enabled) async {
+    _backendLogEnabled = enabled;
     notifyListeners();
-    await _saveBackendPrefs();
+    await _saveUiPrefs();
+  }
+
+  Future<void> clearBackendLogs() async {
+    _backendLogs.clear();
+    notifyListeners();
+  }
+
+  Future<void> setWindowEffect(String value) async {
+    final normalized = value.trim().toLowerCase();
+    if (!_windowEffectValues.contains(normalized)) {
+      return;
+    }
+
+    _windowEffect = normalized;
+    notifyListeners();
+    await _saveUiPrefs();
+    await _applyWindowEffect();
   }
 
   Future<bool> startManagedBackendNow() async {
@@ -437,8 +514,14 @@ class WebSocketService extends ChangeNotifier {
       debugPrint('Stop managed backend failed: $e');
     }
 
+    await _backendStdoutSub?.cancel();
+    await _backendStderrSub?.cancel();
+    _backendStdoutSub = null;
+    _backendStderrSub = null;
+    _managedBackendProcess = null;
     _managedBackendPid = null;
     _managedBackendPort = null;
+    _appendBackendLog('[frontend] managed backend stopped');
     notifyListeners();
     return true;
   }
@@ -446,21 +529,35 @@ class WebSocketService extends ChangeNotifier {
   Future<bool> _startManagedBackendIfNeeded({bool force = false}) async {
     if (kIsWeb || !Platform.isWindows) return false;
     if (_startingManagedBackend) return false;
-    if (!force && !_autoStartBackend) return false;
-    if (_managedBackendPid != null) return true;
+    if (_managedBackendPid != null) {
+      final alive = await _isProcessRunning(_managedBackendPid!);
+      if (alive) {
+        return true;
+      }
+      _managedBackendPid = null;
+      _managedBackendPort = null;
+      _managedBackendProcess = null;
+    }
+
+    const port = _defaultBackendPort;
+    final existingReady = await _checkBackendReady(port);
+    if (existingReady) {
+      _managedBackendPid = null;
+      _managedBackendPort = port;
+      _managedBackendError = null;
+      _serverUrl = _localWsUrl(port);
+      _appendBackendLog(
+          '[frontend] reuse running backend at ${_localWsUrl(port)}');
+      notifyListeners();
+      return true;
+    }
 
     final exePath = _resolveBackendExecutablePath();
     if (exePath == null || exePath.isEmpty) {
-      _managedBackendError = '未找到可执行文件，请先配置后端 exe 路径';
-      notifyListeners();
+      _reportBackendWarning(
+        '未找到后端可执行文件，已切换为直连模式（调试阶段请启动源码后端）',
+      );
       debugPrint('Managed backend start skipped: executable not found');
-      return false;
-    }
-
-    final ports = _candidateBackendPorts();
-    if (ports.isEmpty) {
-      _managedBackendError = '没有可用的候选端口';
-      notifyListeners();
       return false;
     }
 
@@ -468,47 +565,49 @@ class WebSocketService extends ChangeNotifier {
     _managedBackendError = null;
     notifyListeners();
     try {
-      for (final port in ports) {
-        final existingReady = await _checkBackendReady(port);
-        if (existingReady) {
-          _managedBackendError = null;
-          _serverUrl = _localWsUrl(port);
-          notifyListeners();
+      final available = await _isPortAvailable(port);
+      if (!available) {
+        _reportBackendFailure('端口 $port 已被占用，且当前进程不是可识别的后端实例');
+        return false;
+      }
+
+      final pid = await _launchBackendProcess(exePath, port);
+      if (pid == null) {
+        _reportBackendFailure('后端启动失败，无法拉起端口 $port');
+        return false;
+      }
+
+      _managedBackendPid = pid;
+      _managedBackendPort = port;
+      _managedBackendError = null;
+      _serverUrl = _localWsUrl(port);
+      _appendBackendLog(
+          '[frontend] backend process launched (pid=$pid, port=$port)');
+      notifyListeners();
+
+      final ready = await _waitBackendReady(port);
+      if (!ready) {
+        if (await _isProcessRunning(pid)) {
+          _appendBackendLog(
+              '[frontend] backend readiness check timed out on port $port; will keep retrying');
           return true;
         }
 
-        final available = await _isPortAvailable(port);
-        if (!available) {
-          continue;
-        }
-
-        final pid = await _launchBackendProcess(exePath, port);
-        if (pid == null) {
-          continue;
-        }
-
-        final ready = await _waitBackendReady(port);
-        if (!ready) {
-          await _killProcess(pid);
-          continue;
-        }
-
-        _managedBackendPid = pid;
-        _managedBackendPort = port;
-        _managedBackendError = null;
-        _serverUrl = _localWsUrl(port);
-        notifyListeners();
-        return true;
+        _managedBackendPid = null;
+        _managedBackendPort = null;
+        _reportBackendFailure('后端启动后未能在端口 $port 返回 HTTP 200');
+        return false;
       }
 
-      _managedBackendError =
-          '默认端口 $_defaultBackendPort 与备用端口均不可用，请释放端口后重试';
+      _managedBackendError = null;
+      _serverUrl = _localWsUrl(port);
+      _appendBackendLog(
+          '[frontend] backend started silently (pid=$pid, port=$port)');
       notifyListeners();
-      return false;
+      return true;
     } catch (e) {
       debugPrint('Managed backend start exception: $e');
-      _managedBackendError = '启动异常：$e';
-      notifyListeners();
+      _reportBackendFailure('启动异常：$e');
       return false;
     } finally {
       _startingManagedBackend = false;
@@ -516,43 +615,18 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
-  List<int> _candidateBackendPorts() {
-    final ports = <int>[];
-    final preferred = _preferredServerPort();
-
-    if (preferred != null) {
-      ports.add(preferred);
-    }
-    if (!ports.contains(_defaultBackendPort)) {
-      ports.add(_defaultBackendPort);
-    }
-    for (final p in _fallbackBackendPorts) {
-      if (!ports.contains(p)) {
-        ports.add(p);
-      }
-    }
-    return ports;
-  }
-
-  int? _preferredServerPort() {
-    try {
-      final uri = Uri.parse(_serverUrl);
-      if (!_isLocalHost(uri.host)) {
-        return null;
-      }
-      final p = uri.hasPort ? uri.port : _defaultBackendPort;
-      if (p <= 0 || p > 65535) {
-        return null;
-      }
-      return p;
-    } catch (_) {
-      return null;
-    }
-  }
-
   bool _isLocalHost(String host) {
     final value = host.toLowerCase();
     return value == 'localhost' || value == '127.0.0.1' || value == '::1';
+  }
+
+  bool _isLocalBackendTarget(String url) {
+    try {
+      final uri = Uri.parse(url);
+      return _isLocalHost(uri.host);
+    } catch (_) {
+      return false;
+    }
   }
 
   String _localWsUrl(int port) => 'ws://127.0.0.1:$port/ws';
@@ -573,41 +647,67 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
+  void _reportBackendFailure(String message) {
+    _managedBackendError = message;
+    _cancelReconnectTimer();
+    _appendBackendLog('[frontend] $message');
+    notifyListeners();
+  }
+
+  void _reportBackendWarning(String message) {
+    final changed = _managedBackendError != message;
+    _managedBackendError = message;
+    _appendBackendLog('[frontend] $message');
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
   Future<int?> _launchBackendProcess(String exePath, int port) async {
     try {
-      final escapedPath = exePath.replaceAll("'", "''");
-      final workingDir = File(exePath).parent.path.replaceAll("'", "''");
-      final command =
-          "\$env:JP_TOOL_PORT='$port'; \$p = Start-Process -FilePath '$escapedPath' -WorkingDirectory '$workingDir' -WindowStyle Hidden -PassThru; \$p.Id";
-
-      final result = await Process.run(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+      _appendBackendLog('[frontend] launching backend exe: $exePath');
+      final environment = _buildBackendEnvironment(port, exePath);
+      _appendBackendLog(
+        '[frontend] JP_TOOL_DICDIR=${environment['JP_TOOL_DICDIR'] ?? '(not set)'}',
+      );
+      final process = await Process.start(
+        exePath,
+        const [],
+        workingDirectory: File(exePath).parent.path,
+        mode: ProcessStartMode.normal,
+        runInShell: false,
+        environment: environment,
       );
 
-      if (result.exitCode != 0) {
-        debugPrint(
-            'Managed backend start failed on port $port: ${result.stderr ?? 'unknown error'}');
-        return null;
-      }
+      _managedBackendProcess = process;
+      await _backendStdoutSub?.cancel();
+      await _backendStderrSub?.cancel();
+      _backendStdoutSub = process.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) => _appendBackendLog('[stdout] $line'));
+      _backendStderrSub = process.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) => _appendBackendLog('[stderr] $line'));
 
-      final output = result.stdout.toString();
-      final match = RegExp(r'(\d+)').firstMatch(output);
-      if (match == null) {
-        debugPrint('Managed backend start failed on port $port: pid not returned');
-        return null;
-      }
-
-      return int.tryParse(match.group(1)!);
+      unawaited(() async {
+        final exitCode = await process.exitCode;
+        _appendBackendLog(
+            '[frontend] backend process exited (pid=${process.pid}, code=$exitCode)');
+      }());
+      return process.pid;
     } catch (e) {
       debugPrint('Managed backend launch exception on port $port: $e');
+      _appendBackendLog(
+          '[frontend] backend launch exception on port $port: $e');
       return null;
     }
   }
 
   Future<bool> _waitBackendReady(
     int port, {
-    Duration timeout = const Duration(seconds: 8),
+    Duration timeout = const Duration(seconds: 20),
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
@@ -619,6 +719,32 @@ class WebSocketService extends ChangeNotifier {
     return false;
   }
 
+  Future<bool> _isProcessRunning(int pid) async {
+    try {
+      final result = await Process.run(
+        'tasklist',
+        ['/FI', 'PID eq $pid', '/FO', 'CSV', '/NH'],
+      );
+      final output = (result.stdout ?? '').toString().trim();
+      return output.isNotEmpty && !output.contains('No tasks are running');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _checkManagedBackendAliveAndReport() async {
+    final pid = _managedBackendPid;
+    if (pid == null) return;
+
+    if (await _isProcessRunning(pid)) {
+      return;
+    }
+
+    _managedBackendPid = null;
+    _managedBackendPort = null;
+    _reportBackendFailure('后端进程已退出，请检查字典目录或后端启动日志');
+  }
+
   Future<bool> _checkBackendReady(int port) async {
     final client = HttpClient();
     try {
@@ -628,13 +754,11 @@ class WebSocketService extends ChangeNotifier {
         port: port,
         path: '/api/llm/status',
       );
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(milliseconds: 800));
+      final request =
+          await client.getUrl(uri).timeout(const Duration(milliseconds: 800));
       final response =
           await request.close().timeout(const Duration(milliseconds: 800));
-      await response.drain<List<int>>();
-      return response.statusCode >= 200 && response.statusCode < 500;
+      return response.statusCode == 200;
     } catch (_) {
       return false;
     } finally {
@@ -650,28 +774,53 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
-  String? _resolveBackendExecutablePath() {
-    final configured = _backendExecutablePath.trim();
-    if (configured.isNotEmpty && File(configured).existsSync()) {
-      return configured;
-    }
+  Map<String, String> _buildBackendEnvironment(int port, String exePath) {
+    final env = <String, String>{
+      ...Platform.environment,
+      'JP_TOOL_PORT': '$port',
+      'PYTHONUTF8': '1',
+    };
 
+    final dicdir = _resolveDictionaryPath(exePath);
+    if (dicdir != null && dicdir.isNotEmpty) {
+      env['JP_TOOL_DICDIR'] = dicdir;
+    }
+    return env;
+  }
+
+  String? _resolveDictionaryPath(String exePath) {
+    final exeDir = File(exePath).parent.path;
+    final candidates = <String>[
+      '$exeDir\\dicdir',
+      '$exeDir\\resources\\backend\\dicdir',
+      '${Directory.current.path}\\resources\\backend\\dicdir',
+    ];
+
+    for (final path in candidates) {
+      if (Directory(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  String? _resolveBackendExecutablePath() {
     if (kIsWeb || !Platform.isWindows) {
       return null;
     }
 
-    final roots = <String>{
-      Directory.current.path,
-      File(Platform.resolvedExecutable).parent.path,
-    };
+    final roots = <String>{};
+    roots.addAll(_collectAncestorRoots(Directory.current.path));
+    roots.addAll(
+      _collectAncestorRoots(File(Platform.resolvedExecutable).parent.path),
+    );
 
     final candidates = <String>[];
     for (final root in roots) {
       candidates.addAll([
-        '$root\\jp_grammar.exe',
-        '$root\\backend\\jp_grammar.exe',
-        '$root\\backend\\dist\\jp_grammar\\jp_grammar.exe',
-        '$root\\resources\\backend\\jp_grammar.exe',
+        '$root\\resources\\backend\\jp_backend.exe',
+        '$root\\resources\\backend\\main.dist\\jp_backend.exe',
+        '$root\\build\\nuitka\\main.dist\\jp_backend.exe',
       ]);
     }
 
@@ -682,6 +831,24 @@ class WebSocketService extends ChangeNotifier {
     }
 
     return null;
+  }
+
+  Set<String> _collectAncestorRoots(String startPath, {int maxDepth = 12}) {
+    final results = <String>{};
+    var current = Directory(startPath).absolute;
+
+    for (var i = 0; i <= maxDepth; i++) {
+      final normalized = current.path;
+      results.add(normalized);
+
+      final parent = current.parent;
+      if (parent.path == current.path) {
+        break;
+      }
+      current = parent;
+    }
+
+    return results;
   }
 
   Uri _apiUri(String path) {
@@ -750,11 +917,13 @@ class WebSocketService extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('Failed to parse message: $e');
+      _appendBackendLog('[frontend] Failed to parse message: $e');
     }
   }
 
   bool _isEmptyDeepResult(DeepResult deep) {
     return deep.coreGrammar.isEmpty &&
+        deep.wordMeanings.isEmpty &&
         deep.sentenceBreakdown.isEmpty &&
         deep.grammarTree.isEmpty &&
         deep.comparisons.isEmpty &&
@@ -798,8 +967,15 @@ class WebSocketService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       _autoStartBackend =
           prefs.getBool(_backendAutoStartStorageKey) ?? _autoStartBackend;
-      _backendExecutablePath =
-          (prefs.getString(_backendExePathStorageKey) ?? '').trim();
+      _backendLogEnabled =
+          prefs.getBool(_backendLogEnabledStorageKey) ?? _backendLogEnabled;
+
+      final effect = (prefs.getString(_windowEffectStorageKey) ?? _windowEffect)
+          .trim()
+          .toLowerCase();
+      if (_windowEffectValues.contains(effect)) {
+        _windowEffect = effect;
+      }
 
       final limit =
           prefs.getInt(_historyLimitStorageKey) ?? _defaultHistoryLimit;
@@ -823,6 +999,7 @@ class WebSocketService extends ChangeNotifier {
 
       _trimHistoryToLimit();
       notifyListeners();
+      await _applyWindowEffect();
     } catch (e) {
       debugPrint('Load local history failed: $e');
     }
@@ -846,14 +1023,74 @@ class WebSocketService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_backendAutoStartStorageKey, _autoStartBackend);
-      await prefs.setString(_backendExePathStorageKey, _backendExecutablePath);
     } catch (e) {
       debugPrint('Save backend prefs failed: $e');
     }
   }
 
+  Future<void> _saveUiPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_backendLogEnabledStorageKey, _backendLogEnabled);
+      await prefs.setString(_windowEffectStorageKey, _windowEffect);
+    } catch (e) {
+      debugPrint('Save ui prefs failed: $e');
+    }
+  }
+
+  void _appendBackendLog(String line) {
+    if (!_backendLogEnabled) {
+      return;
+    }
+
+    final text = line.trim();
+    if (text.isEmpty) {
+      return;
+    }
+
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    final ss = now.second.toString().padLeft(2, '0');
+    _backendLogs.add('[$hh:$mm:$ss] $text');
+    if (_backendLogs.length > _maxBackendLogLines) {
+      _backendLogs.removeRange(0, _backendLogs.length - _maxBackendLogLines);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _applyWindowEffect() async {
+    if (kIsWeb || !Platform.isWindows) {
+      return;
+    }
+
+    try {
+      if (!_windowEffectInitialized) {
+        await Window.initialize();
+        _windowEffectInitialized = true;
+      }
+      await Window.setEffect(effect: _toWindowEffect(_windowEffect));
+    } catch (e) {
+      debugPrint('Apply acrylic effect failed: $e');
+    }
+  }
+
+  WindowEffect _toWindowEffect(String value) {
+    switch (value) {
+      case 'mica':
+        return WindowEffect.mica;
+      case 'disabled':
+        return WindowEffect.disabled;
+      case 'transparent':
+      default:
+        return WindowEffect.transparent;
+    }
+  }
+
   @override
   void dispose() {
+    unawaited(_backendStdoutSub?.cancel());
+    unawaited(_backendStderrSub?.cancel());
     unawaited(stopManagedBackendNow());
     _cancelReconnectTimer();
     disconnect();

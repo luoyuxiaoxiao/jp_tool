@@ -18,21 +18,18 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _urlController;
-  late TextEditingController _backendExeController;
 
   @override
   void initState() {
     super.initState();
     final ws = context.read<WebSocketService>();
     _urlController = TextEditingController(text: ws.serverUrl);
-    _backendExeController = TextEditingController(text: ws.backendExecutablePath);
     unawaited(ws.refreshServerStatus());
   }
 
   @override
   void dispose() {
     _urlController.dispose();
-    _backendExeController.dispose();
     super.dispose();
   }
 
@@ -71,97 +68,105 @@ class _SettingsScreenState extends State<SettingsScreen> {
             builder: (_, ws, __) => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('后端进程管理（Windows）',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text('窗口材质效果', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('启动前端时自动拉起后端'),
-                  subtitle: Text(ws.autoStartBackend
-                      ? '当前开启：连接失败时会尝试自动启动后端 exe'
-                      : '当前关闭：只尝试连接已运行的后端'),
-                  value: ws.autoStartBackend,
+                DropdownButtonFormField<String>(
+                  initialValue: ws.windowEffect,
+                  decoration: const InputDecoration(
+                    labelText: '窗口效果',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: ws.windowEffectValues
+                      .map(
+                        (v) => DropdownMenuItem<String>(
+                          value: v,
+                          child: Text(_windowEffectLabel(v)),
+                        ),
+                      )
+                      .toList(),
                   onChanged: (value) async {
-                    await ws.setAutoStartBackend(value);
+                    if (value == null) return;
+                    await ws.setWindowEffect(value);
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                           content:
-                              Text(value ? '已开启自动启动后端' : '已关闭自动启动后端')),
+                              Text('窗口效果已切换为：${_windowEffectLabel(value)}')),
                     );
                   },
                 ),
-                TextField(
-                  controller: _backendExeController,
-                  decoration: const InputDecoration(
-                    labelText: '后端 exe 路径（可选）',
-                    hintText:
-                        '例如：F:\\jp_tool\\backend\\dist\\jp_grammar\\jp_grammar.exe',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.save_outlined),
-                      label: const Text('保存路径'),
-                      onPressed: () async {
-                        await ws.setBackendExecutablePath(
-                            _backendExeController.text.trim());
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('后端路径已保存')),
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton.icon(
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('启动后端'),
-                      onPressed: () async {
-                        await ws.setBackendExecutablePath(
-                            _backendExeController.text.trim());
-                        final ok = await ws.startManagedBackendNow();
-                        final port = ws.managedBackendPort;
-                        final error = ws.managedBackendError;
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content: Text(ok
-                                  ? '已启动后端（隐藏窗口），端口：${port ?? '-'}'
-                                  : ((error != null && error.isNotEmpty)
-                                      ? '启动失败：$error'
-                                      : '启动失败，请检查 exe 路径'))),
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.stop_circle_outlined),
-                      label: const Text('停止后端'),
-                      onPressed: () async {
-                        final ok = await ws.stopManagedBackendNow();
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content: Text(
-                                  ok ? '已停止托管后端' : '当前没有托管中的后端进程')),
-                        );
-                      },
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 4),
-                Text(
-                  ws.isManagedBackendRunning
-                      ? '托管进程 PID：${ws.managedBackendPid}，端口：${ws.managedBackendPort ?? '-'}'
-                      : ((ws.managedBackendError != null &&
-                              ws.managedBackendError!.isNotEmpty)
-                          ? '当前未检测到托管后端进程（${ws.managedBackendError}）'
-                          : '当前未检测到托管后端进程'),
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                const Text(
+                  '仅保留差异明显的材质：Transparent / Mica / Disabled',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
+                const SizedBox(height: 12),
+                Text('后端日志', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('启用后端日志'),
+                  subtitle: Text(ws.backendLogEnabled
+                      ? '当前开启：展示后端 stdout/stderr（最多保留 600 行）'
+                      : '当前关闭：不显示后端日志输出'),
+                  value: ws.backendLogEnabled,
+                  onChanged: (value) async {
+                    await ws.setBackendLogEnabled(value);
+                  },
+                ),
+                if (ws.backendLogEnabled) ...[
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('清空日志'),
+                        onPressed: () async {
+                          await ws.clearBackendLogs();
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      Text('日志行数：${ws.backendLogs.length}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    width: double.infinity,
+                    height: 180,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white24),
+                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.black.withAlpha(70),
+                    ),
+                    child: Scrollbar(
+                      thumbVisibility: true,
+                      child: ListView.builder(
+                        itemCount: ws.backendLogs.length,
+                        itemBuilder: (_, index) {
+                          final line = ws.backendLogs[index];
+                          return SelectableText(
+                            line,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              height: 1.25,
+                              color: Colors.white70,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+                if (ws.managedBackendError != null &&
+                    ws.managedBackendError!.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '后端状态：${ws.managedBackendError}',
+                    style: const TextStyle(fontSize: 12, color: Colors.orange),
+                  ),
+                ],
               ],
             ),
           ),
@@ -331,5 +336,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  String _windowEffectLabel(String value) {
+    switch (value) {
+      case 'transparent':
+        return 'Transparent（默认）';
+      case 'mica':
+        return 'Mica';
+      case 'disabled':
+        return 'Disabled';
+      default:
+        return value;
+    }
   }
 }

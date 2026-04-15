@@ -45,6 +45,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final _inputFocusNode = FocusNode();
+  String? _lastRenderedText;
 
   @override
   void dispose() {
@@ -216,7 +217,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         children: [
                           _buildInputBar(),
                           const Divider(height: 1),
-                          Expanded(child: _buildResults()),
+                          Expanded(
+                            child: ColoredBox(
+                              color: const Color(0x6611151D),
+                              child: _buildResults(),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -273,7 +279,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   onChanged: (value) async {
                     final ok = await ws.setClipboardEnabled(value);
                     if (!mounted) return;
-                    ScaffoldMessenger.of(this.context).showSnackBar(
+                    ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
                           ok
@@ -331,6 +337,22 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           );
         }
 
+        if (_lastRenderedText != basic.text) {
+          _lastRenderedText = basic.text;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scrollController.hasClients) {
+              return;
+            }
+            _scrollController.jumpTo(0);
+          });
+        }
+
+        final hasLocalDetails =
+            basic.tokens.isNotEmpty || basic.grammarMatches.isNotEmpty;
+        final hasDeepDetails = deep != null;
+        final showNoDetailsHint =
+            !state.isLoadingDeep && !hasLocalDetails && !hasDeepDetails;
+
         return SingleChildScrollView(
           controller: _scrollController,
           padding: const EdgeInsets.all(16),
@@ -341,9 +363,30 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 text: basic.text,
                 matches: basic.grammarMatches,
                 annotations: deep?.levelAnnotations ?? [],
+                tokens: basic.tokens,
               ),
+              if (showNoDetailsHint) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: const Text(
+                    '已收到文本，但当前没有可展示的本地语法细节。\n'
+                    '请检查后端日志、词典状态或切换 LLM 配置后重试。',
+                    style: TextStyle(fontSize: 13, color: Colors.grey),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
-              WordCard(tokens: basic.tokens),
+              WordCard(
+                tokens: basic.tokens,
+                wordMeanings: deep?.wordMeaningMap ?? const {},
+              ),
               const SizedBox(height: 16),
               if (state.isLoadingDeep && deep == null)
                 const Padding(

@@ -137,11 +137,11 @@ def _init_api(silent: bool = False, force_format: str | None = None):
             logger.warning("API key not set. Please set API_KEY.")
         return
 
-    timeout_text = os.environ.get("API_TIMEOUT", "30")
+    timeout_text = os.environ.get("API_TIMEOUT", "60")
     try:
         timeout = float(timeout_text)
     except Exception:
-        timeout = 30.0
+        timeout = 60.0
 
     from .api_provider import ApiProvider
 

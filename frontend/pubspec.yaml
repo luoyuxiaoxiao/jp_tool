@@ -13,6 +13,7 @@ dependencies:
   provider: ^6.1.0
   google_fonts: ^6.1.0
   shared_preferences: ^2.2.0
+  flutter_acrylic: ^1.1.4
 
 dev_dependencies:
   flutter_test:
@@ -21,3 +22,22 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: LXGWWenKaiScreen
+      fonts:
+        - asset: assets/fonts/LXGWWenKaiScreen.ttf
+    - family: LXGWWenKaiGBScreen
+      fonts:
+        - asset: assets/fonts/LXGWWenKaiGBScreen.ttf
+    - family: KleeOne
+      fonts:
+        - asset: assets/fonts/KleeOne-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/KleeOne-SemiBold.ttf
+          weight: 600
+    - family: ReggaeOne
+      fonts:
+        - asset: assets/fonts/ReggaeOne-Regular.ttf
+    - family: RampartOne
+      fonts:
+        - asset: assets/fonts/RampartOne-Regular.ttf
