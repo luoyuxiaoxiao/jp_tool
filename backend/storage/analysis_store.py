@@ -143,6 +143,55 @@ def get_recent_results(limit: int = 50) -> list[dict]:
     return items
 
 
+def get_cached_result(text: str) -> dict | None:
+    """Fetch cached basic/deep result for a specific source text."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return None
+
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT text, basic_json, deep_json, hit_count, created_at, updated_at
+                FROM analysis_history
+                WHERE text_hash = ?
+                """,
+                (_text_hash(normalized),),
+            ).fetchone()
+        finally:
+            conn.close()
+
+    if not row:
+        return None
+
+    text_val, basic_json, deep_json, hit_count, created_at, updated_at = row
+    basic_obj = None
+    deep_obj = None
+
+    if isinstance(basic_json, str) and basic_json.strip():
+        try:
+            basic_obj = json.loads(basic_json)
+        except Exception:
+            basic_obj = None
+
+    if isinstance(deep_json, str) and deep_json.strip():
+        try:
+            deep_obj = json.loads(deep_json)
+        except Exception:
+            deep_obj = None
+
+    return {
+        "text": text_val,
+        "basic_result": basic_obj,
+        "deep_result": deep_obj,
+        "hit_count": int(hit_count or 0),
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
 def prune_to_limit(max_rows: int = 1000) -> int:
     """Prune old records and keep only newest max_rows entries."""
     keep = max(50, min(int(max_rows), 20000))
@@ -167,3 +216,24 @@ def prune_to_limit(max_rows: int = 1000) -> int:
             conn.close()
 
     return int(before or 0) - int(after or 0)
+
+
+def delete_history_by_text(text: str) -> int:
+    """Delete one analysis record by source text and return affected row count."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return 0
+
+    with _LOCK:
+        conn = _connect()
+        try:
+            cur = conn.execute(
+                "DELETE FROM analysis_history WHERE text_hash = ?",
+                (_text_hash(normalized),),
+            )
+            conn.commit()
+            deleted = int(cur.rowcount or 0)
+        finally:
+            conn.close()
+
+    return deleted

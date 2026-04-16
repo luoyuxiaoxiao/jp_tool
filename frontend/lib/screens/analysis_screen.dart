@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/analysis_result.dart';
 import '../services/websocket_service.dart';
 import '../utils/shortcut_utils.dart';
 import '../widgets/grammar_highlight.dart';
@@ -13,6 +14,7 @@ import '../widgets/sentence_breakdown.dart';
 import '../widgets/grammar_tree.dart';
 import '../widgets/comparison_table.dart';
 import '../widgets/common_mistakes_view.dart';
+import '../widgets/dependency_focus_view.dart';
 import 'settings_screen.dart';
 import 'llm_config_screen.dart';
 import 'shortcut_config_screen.dart';
@@ -43,6 +45,7 @@ class AnalysisScreen extends StatefulWidget {
 class _AnalysisScreenState extends State<AnalysisScreen> {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
+  final _longTextScrollController = ScrollController();
   final _inputFocusNode = FocusNode();
   String? _lastRenderedText;
 
@@ -51,6 +54,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     _inputFocusNode.dispose();
     _controller.dispose();
     _scrollController.dispose();
+    _longTextScrollController.dispose();
     super.dispose();
   }
 
@@ -83,6 +87,52 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       SnackBar(
         content: Text(
           ok ? (target ? '快捷键：已开启语法自动学习' : '快捷键：已关闭语法自动学习') : '快捷键执行失败，请检查后端连接',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _refreshHistoryFromBackend(WebSocketService ws) async {
+    await ws.refreshHistoryFromBackend();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已从后端刷新历史记录')),
+    );
+  }
+
+  Future<void> _deleteHistoryItem(WebSocketService ws, BasicResult item) async {
+    final preview =
+        item.text.length > 60 ? '${item.text.substring(0, 60)}...' : item.text;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('删除历史记录'),
+        content: Text('确认删除这条记录吗？\n\n$preview'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    final ok = await ws.deleteHistoryItem(item.text);
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? '历史记录已删除（已同步后端）' : '历史记录已删除（后端同步失败）',
         ),
       ),
     );
@@ -298,6 +348,161 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         ws.clipboardEnabled ? Colors.greenAccent : Colors.grey,
                   ),
                 ),
+                const SizedBox(width: 16),
+                const Text('跟随模式', style: TextStyle(fontSize: 13)),
+                const SizedBox(width: 8),
+                Switch(
+                  value: ws.followModeEnabled,
+                  onChanged: (value) async {
+                    final ok = await ws.setFollowModeEnabled(value);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok ? (value ? '已开启跟随模式' : '已关闭跟随模式') : '切换失败，请检查后端连接',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  ws.followModeEnabled ? '已开启' : '已关闭',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color:
+                        ws.followModeEnabled ? Colors.greenAccent : Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                const Text('Luna预取', style: TextStyle(fontSize: 13)),
+                const SizedBox(width: 8),
+                Switch(
+                  value: ws.resourceConfig.lunaWsEnabled,
+                  onChanged: (value) async {
+                    final ok = await ws.setLunaWsEnabled(value);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok
+                              ? (value ? '已开启 Luna 预取' : '已关闭 Luna 预取')
+                              : '切换失败，请检查后端连接',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  ws.resourceConfig.lunaWsEnabled ? '已开启' : '已关闭',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: ws.resourceConfig.lunaWsEnabled
+                        ? Colors.greenAccent
+                        : Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                const Text('分词', style: TextStyle(fontSize: 13)),
+                const SizedBox(width: 6),
+                PopupMenuButton<String>(
+                  tooltip: 'GiNZA 分词等级',
+                  onSelected: (mode) async {
+                    final ok = await ws.setGinzaSplitMode(mode);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok ? 'GiNZA 分词等级已切换为 $mode' : '切换失败，请检查后端连接',
+                        ),
+                      ),
+                    );
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'A',
+                      child: Text('A（细粒度）'),
+                    ),
+                    PopupMenuItem(
+                      value: 'B',
+                      child: Text('B（平衡）'),
+                    ),
+                    PopupMenuItem(
+                      value: 'C',
+                      child: Text('C（粗粒度，阅读推荐）'),
+                    ),
+                  ],
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white24),
+                      color: Colors.white10,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'GiNZA ${ws.resourceConfig.ginzaSplitMode}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        const SizedBox(width: 2),
+                        const Icon(Icons.arrow_drop_down, size: 16),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                PopupMenuButton<String>(
+                  tooltip: '依存聚焦风格',
+                  onSelected: (style) async {
+                    final ok = await ws.setDependencyFocusStyle(style);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok
+                              ? '依存聚焦风格已切换为 ${style == 'vivid' ? 'vivid（炫彩）' : 'classic（经典）'}'
+                              : '切换失败，请检查后端连接',
+                        ),
+                      ),
+                    );
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'classic',
+                      child: Text('classic（经典）'),
+                    ),
+                    PopupMenuItem(
+                      value: 'vivid',
+                      child: Text('vivid（炫彩）'),
+                    ),
+                  ],
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white24),
+                      color: Colors.white10,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          ws.resourceConfig.dependencyFocusStyle == 'vivid'
+                              ? '依存 vivid'
+                              : '依存 classic',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        const SizedBox(width: 2),
+                        const Icon(Icons.arrow_drop_down, size: 16),
+                      ],
+                    ),
+                  ),
+                ),
                 const Spacer(),
                 if (!ws.llmEnabled)
                   const Text(
@@ -346,7 +551,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           });
         }
 
-        final hasLocalDetails = basic.grammarMatches.isNotEmpty;
+        final hasLocalDetails =
+            basic.grammarMatches.isNotEmpty || basic.tokens.isNotEmpty;
         final hasDeepDetails = deep != null;
         final showNoDetailsHint =
             !state.isLoadingDeep && !hasLocalDetails && !hasDeepDetails;
@@ -361,7 +567,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 text: basic.text,
                 matches: basic.grammarMatches,
                 annotations: deep?.levelAnnotations ?? [],
+                tokens: basic.tokens,
               ),
+              if (basic.tokens.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DependencyFocusView(
+                  tokens: basic.tokens,
+                  style: ws.resourceConfig.dependencyFocusStyle,
+                ),
+              ],
               if (showNoDetailsHint) ...[
                 const SizedBox(height: 8),
                 Container(
@@ -440,8 +654,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 280),
             child: Scrollbar(
+              controller: _longTextScrollController,
               thumbVisibility: content.length > 300,
               child: SingleChildScrollView(
+                controller: _longTextScrollController,
                 child: SelectableText(
                   content,
                   style: const TextStyle(fontSize: 14, height: 1.5),
@@ -484,8 +700,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           children: [
             Container(
               padding: const EdgeInsets.all(12),
-              child: Text('历史记录 (${history.length})',
-                  style: Theme.of(context).textTheme.titleSmall),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('历史记录 (${history.length})',
+                        style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  IconButton(
+                    tooltip: '从后端刷新历史',
+                    onPressed: () => unawaited(_refreshHistoryFromBackend(ws)),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
             ),
             const Divider(height: 1),
             Expanded(
@@ -504,6 +732,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 13),
+                          ),
+                          trailing: IconButton(
+                            tooltip: '删除这条历史记录',
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              size: 18,
+                            ),
+                            onPressed: () =>
+                                unawaited(_deleteHistoryItem(ws, item)),
                           ),
                           onTap: () => ws.sendText(item.text),
                         );

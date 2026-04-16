@@ -13,6 +13,13 @@ class Token(BaseModel):
     pos_detail: str = ""   # 品詞細分類
     base: str = ""         # 原形
     conjugation: str = ""  # 活用形
+    index: int = 0
+    head_index: int = 0
+    dep: str = ""
+    char_start: int = 0
+    char_end: int = 0
+    meaning_zh: str = ""
+    is_punctuation: bool = False
 
 
 class GrammarMatch(BaseModel):

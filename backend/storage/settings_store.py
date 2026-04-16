@@ -13,6 +13,8 @@ _LOCK = threading.Lock()
 DEFAULT_SETTINGS = {
     "JP_TOOL_LLM": "auto",
     "JP_TOOL_GRAMMAR_AUTO_LEARN": "on",
+    "JP_TOOL_DEEP_AUTO_ANALYZE": "on",
+    "JP_TOOL_FOLLOW_MODE": "off",
     "OLLAMA_MODEL": "qwen2.5:7b",
     "OLLAMA_URL": "http://localhost:11434",
     "API_FORMAT": "openai",
@@ -25,6 +27,15 @@ DEFAULT_SETTINGS = {
     "SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN": "ctrl+shift+g",
     "SHORTCUT_SUBMIT_ANALYZE": "ctrl+enter",
     "SHORTCUT_FOCUS_INPUT": "ctrl+l",
+    "RESOURCE_DICT_DB_PATH": "",
+    "RESOURCE_GINZA_MODEL_PATH": "ja_ginza_electra",
+    "RESOURCE_GINZA_SPLIT_MODE": "C",
+    "RESOURCE_DEPENDENCY_FOCUS_STYLE": "classic",
+    "RESOURCE_ONNX_MODEL_PATH": "",
+    "LUNA_WS_ENABLED": "off",
+    "LUNA_WS_ORIGIN_URL": "",
+    "JP_TOOL_QUEUE_MAX_PENDING": "120",
+    "JP_TOOL_QUEUE_DROP_PREFETCH_WHEN_BUSY": "on",
 }
 
 

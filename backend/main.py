@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import mimetypes
@@ -20,18 +21,22 @@ from capture.http_receiver import router as http_router, set_callback
 try:
     from backend.storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
     from backend.storage.analysis_store import (
+        get_cached_result,
         upsert_basic_result,
         upsert_deep_result,
         get_recent_results,
         prune_to_limit,
+        delete_history_by_text,
     )
 except ModuleNotFoundError:
     from storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
     from storage.analysis_store import (
+        get_cached_result,
         upsert_basic_result,
         upsert_deep_result,
         get_recent_results,
         prune_to_limit,
+        delete_history_by_text,
     )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -68,6 +73,70 @@ _clipboard_task: asyncio.Task | None = None
 _clipboard_enabled = os.environ.get("JP_TOOL_CLIPBOARD", "on").lower() not in {
     "0", "false", "off", "no"
 }
+
+_deep_queue: asyncio.PriorityQueue[tuple[int, int, str, dict]] = asyncio.PriorityQueue()
+_deep_queue_counter = 0
+_deep_queue_pending: set[str] = set()
+_deep_queue_inflight: set[str] = set()
+_deep_worker_task: asyncio.Task | None = None
+_deep_queue_dropped_prefetch = 0
+
+_luna_stream_task: asyncio.Task | None = None
+_luna_stream_connected = False
+
+
+def _text_key(text: str) -> str:
+    normalized = (text or "").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _normalize_luna_ws_origin_url(raw: object) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+
+    if text.isdigit():
+        return f"ws://127.0.0.1:{int(text)}/api/ws/text/origin"
+
+    if text.startswith("ws://") or text.startswith("wss://"):
+        return text
+
+    if text.startswith("http://"):
+        ws_url = "ws://" + text[len("http://") :]
+    elif text.startswith("https://"):
+        ws_url = "wss://" + text[len("https://") :]
+    elif ":" in text and "/" not in text:
+        ws_url = f"ws://{text}"
+    else:
+        ws_url = text
+
+    parsed = None
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(ws_url)
+    except Exception:
+        parsed = None
+
+    if parsed and parsed.scheme in {"ws", "wss"}:
+        path = parsed.path or ""
+        if not path or path == "/":
+            return f"{parsed.scheme}://{parsed.netloc}/api/ws/text/origin"
+    return ws_url
+
+
+def _normalize_ginza_split_mode(raw: object) -> str:
+    mode = str(raw or "").strip().upper()
+    if mode in {"A", "B", "C"}:
+        return mode
+    return "C"
+
+
+def _normalize_dependency_focus_style(raw: object) -> str:
+    style = str(raw or "").strip().lower()
+    if style in {"classic", "vivid"}:
+        return style
+    return "classic"
 
 
 async def _set_clipboard_enabled(enabled: bool):
@@ -124,6 +193,125 @@ def _set_grammar_auto_learn_enabled(enabled: bool):
     )
 
 
+def _get_deep_auto_analyze_enabled() -> bool:
+    raw = os.environ.get("JP_TOOL_DEEP_AUTO_ANALYZE", "on")
+    return _to_bool(raw, default=True)
+
+
+def _set_deep_auto_analyze_enabled(enabled: bool):
+    os.environ["JP_TOOL_DEEP_AUTO_ANALYZE"] = "on" if enabled else "off"
+    save_runtime_settings(
+        {
+            "JP_TOOL_DEEP_AUTO_ANALYZE": "on" if enabled else "off",
+        }
+    )
+
+
+def _get_follow_mode_enabled() -> bool:
+    raw = os.environ.get("JP_TOOL_FOLLOW_MODE", "off")
+    return _to_bool(raw, default=False)
+
+
+def _set_follow_mode_enabled(enabled: bool):
+    os.environ["JP_TOOL_FOLLOW_MODE"] = "on" if enabled else "off"
+    save_runtime_settings(
+        {
+            "JP_TOOL_FOLLOW_MODE": "on" if enabled else "off",
+        }
+    )
+
+
+def _resource_config_from_settings() -> dict[str, str | bool]:
+    settings = get_runtime_settings()
+    luna_enabled_raw = os.environ.get(
+        "LUNA_WS_ENABLED",
+        settings.get("LUNA_WS_ENABLED", "off"),
+    )
+
+    queue_max_raw = str(
+        os.environ.get(
+            "JP_TOOL_QUEUE_MAX_PENDING",
+            settings.get("JP_TOOL_QUEUE_MAX_PENDING", "120"),
+        )
+    ).strip()
+    try:
+        queue_max_pending = int(queue_max_raw)
+    except Exception:
+        queue_max_pending = 120
+    queue_max_pending = max(10, min(queue_max_pending, 5000))
+
+    drop_prefetch_raw = os.environ.get(
+        "JP_TOOL_QUEUE_DROP_PREFETCH_WHEN_BUSY",
+        settings.get("JP_TOOL_QUEUE_DROP_PREFETCH_WHEN_BUSY", "on"),
+    )
+
+    luna_ws_origin = _normalize_luna_ws_origin_url(
+        os.environ.get(
+            "LUNA_WS_ORIGIN_URL",
+            settings.get("LUNA_WS_ORIGIN_URL", ""),
+        )
+    )
+
+    return {
+        "dictionary_db_path": str(
+            os.environ.get(
+                "RESOURCE_DICT_DB_PATH",
+                settings.get("RESOURCE_DICT_DB_PATH", ""),
+            )
+        ).strip(),
+        "ginza_model_path": str(
+            os.environ.get(
+                "RESOURCE_GINZA_MODEL_PATH",
+                settings.get("RESOURCE_GINZA_MODEL_PATH", ""),
+            )
+        ).strip(),
+        "ginza_split_mode": _normalize_ginza_split_mode(
+            os.environ.get(
+                "RESOURCE_GINZA_SPLIT_MODE",
+                settings.get("RESOURCE_GINZA_SPLIT_MODE", "C"),
+            )
+        ),
+        "dependency_focus_style": _normalize_dependency_focus_style(
+            os.environ.get(
+                "RESOURCE_DEPENDENCY_FOCUS_STYLE",
+                settings.get("RESOURCE_DEPENDENCY_FOCUS_STYLE", "classic"),
+            )
+        ),
+        "onnx_model_path": str(
+            os.environ.get(
+                "RESOURCE_ONNX_MODEL_PATH",
+                settings.get("RESOURCE_ONNX_MODEL_PATH", ""),
+            )
+        ).strip(),
+        "luna_ws_enabled": _to_bool(luna_enabled_raw, default=False),
+        "luna_ws_origin_url": luna_ws_origin,
+        "queue_max_pending": queue_max_pending,
+        "queue_drop_prefetch_when_busy": _to_bool(drop_prefetch_raw, default=True),
+    }
+
+
+def _get_luna_ws_enabled() -> bool:
+    raw = os.environ.get("LUNA_WS_ENABLED", "off")
+    return _to_bool(raw, default=False)
+
+
+def _get_luna_ws_origin_url() -> str:
+    return _normalize_luna_ws_origin_url(os.environ.get("LUNA_WS_ORIGIN_URL", ""))
+
+
+def _get_queue_max_pending() -> int:
+    try:
+        value = int(str(os.environ.get("JP_TOOL_QUEUE_MAX_PENDING", "120")).strip())
+    except Exception:
+        value = 120
+    return max(10, min(value, 5000))
+
+
+def _get_queue_drop_prefetch_when_busy() -> bool:
+    raw = os.environ.get("JP_TOOL_QUEUE_DROP_PREFETCH_WHEN_BUSY", "on")
+    return _to_bool(raw, default=True)
+
+
 def _get_shortcut_config() -> dict[str, str]:
     settings = get_runtime_settings()
     return {
@@ -158,6 +346,243 @@ def _get_shortcut_config() -> dict[str, str]:
     }
 
 
+def _deep_queue_status() -> dict[str, object]:
+    return {
+        "pending": len(_deep_queue_pending),
+        "inflight": len(_deep_queue_inflight),
+        "queued_total": _deep_queue.qsize(),
+        "max_pending": _get_queue_max_pending(),
+        "drop_prefetch_when_busy": _get_queue_drop_prefetch_when_busy(),
+        "dropped_prefetch": _deep_queue_dropped_prefetch,
+    }
+
+
+def _parse_tokens_with_optional_ginza(text: str) -> list:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return []
+
+    try:
+        from analyzer.ginza_runtime import parse_tokens_with_ginza
+    except ModuleNotFoundError:
+        try:
+            from ginza_runtime import parse_tokens_with_ginza
+        except Exception:
+            return []
+
+    try:
+        split_mode = _normalize_ginza_split_mode(
+            os.environ.get("RESOURCE_GINZA_SPLIT_MODE", "C")
+        )
+        return parse_tokens_with_ginza(normalized, split_mode=split_mode)
+    except Exception as exc:
+        logger.warning("GiNZA parse skipped: %s", exc)
+        return []
+
+
+def _get_ginza_runtime_status() -> dict[str, object]:
+    try:
+        from analyzer.ginza_runtime import get_ginza_status
+    except ModuleNotFoundError:
+        try:
+            from ginza_runtime import get_ginza_status
+        except Exception as exc:
+            return {
+                "enabled": False,
+                "error": f"GiNZA runtime module unavailable: {exc}",
+            }
+
+    try:
+        status = get_ginza_status()
+        if isinstance(status, dict):
+            return status
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "error": f"GiNZA status failed: {exc}",
+        }
+
+    return {
+        "enabled": False,
+        "error": "GiNZA status unknown",
+    }
+
+
+async def _ensure_deep_worker_running():
+    global _deep_worker_task
+    if _deep_worker_task is None or _deep_worker_task.done():
+        _deep_worker_task = asyncio.create_task(_deep_worker_loop())
+
+
+async def _deep_worker_loop():
+    logger.info("Deep analysis worker started")
+    while True:
+        priority, _, text, metadata = await _deep_queue.get()
+        key = _text_key(text)
+        _deep_queue_pending.discard(key)
+        _deep_queue_inflight.add(key)
+        try:
+            prefetch = _to_bool(metadata.get("prefetch", False), default=False)
+            follow_mode = _get_follow_mode_enabled()
+            broadcast_result = (not prefetch) or (prefetch and follow_mode)
+            source = str(metadata.get("source", "queue") or "queue")
+            logger.info(
+                "Deep worker consume text (priority=%s, source=%s): %s",
+                priority,
+                source,
+                text[:60],
+            )
+            await _deep_analysis(text, broadcast_result=broadcast_result, source=source)
+        except Exception:
+            logger.exception("Deep worker task failed")
+        finally:
+            _deep_queue_inflight.discard(key)
+            _deep_queue.task_done()
+
+
+async def _enqueue_deep_analysis(
+    text: str,
+    *,
+    priority: int,
+    metadata: dict | None = None,
+) -> bool:
+    global _deep_queue_counter, _deep_queue_dropped_prefetch
+
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+
+    meta = dict(metadata or {})
+    prefetch = _to_bool(meta.get("prefetch", False), default=False)
+    force = _to_bool(meta.get("force", False), default=False)
+
+    backlog = len(_deep_queue_pending) + len(_deep_queue_inflight)
+    max_pending = _get_queue_max_pending()
+    if not force and backlog >= max_pending:
+        if prefetch and _get_queue_drop_prefetch_when_busy():
+            _deep_queue_dropped_prefetch += 1
+            logger.info(
+                "Drop prefetch due queue busy (backlog=%s, max=%s): %s",
+                backlog,
+                max_pending,
+                normalized[:60],
+            )
+            return False
+        logger.warning(
+            "Skip enqueue due queue busy (backlog=%s, max=%s): %s",
+            backlog,
+            max_pending,
+            normalized[:60],
+        )
+        return False
+
+    key = _text_key(normalized)
+    if key in _deep_queue_pending or key in _deep_queue_inflight:
+        return False
+
+    _deep_queue_counter += 1
+    _deep_queue_pending.add(key)
+    _deep_queue.put_nowait((priority, _deep_queue_counter, normalized, meta))
+    await _ensure_deep_worker_running()
+    return True
+
+
+def _extract_luna_text_message(message: str) -> str:
+    raw = str(message or "").strip()
+    if not raw:
+        return ""
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, str):
+            return parsed.strip()
+        if isinstance(parsed, dict):
+            for key in ("text", "origin", "content", "sentence"):
+                value = parsed.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    except Exception:
+        pass
+
+    return raw
+
+
+async def _stop_luna_stream_task():
+    global _luna_stream_task, _luna_stream_connected
+    if _luna_stream_task and not _luna_stream_task.done():
+        _luna_stream_task.cancel()
+        try:
+            await _luna_stream_task
+        except asyncio.CancelledError:
+            pass
+    _luna_stream_task = None
+    _luna_stream_connected = False
+
+
+async def _ensure_luna_stream_task():
+    global _luna_stream_task
+
+    enabled = _get_luna_ws_enabled()
+    url = _get_luna_ws_origin_url()
+    if not enabled or not url:
+        await _stop_luna_stream_task()
+        return
+
+    if _luna_stream_task is None or _luna_stream_task.done():
+        _luna_stream_task = asyncio.create_task(_luna_stream_loop())
+
+
+async def _luna_stream_loop():
+    global _luna_stream_connected
+    logger.info("Luna stream worker started")
+
+    while True:
+        if not _get_luna_ws_enabled():
+            _luna_stream_connected = False
+            await asyncio.sleep(1.0)
+            continue
+
+        url = _get_luna_ws_origin_url()
+        if not url:
+            _luna_stream_connected = False
+            await asyncio.sleep(1.0)
+            continue
+
+        try:
+            import websockets
+
+            logger.info("Connecting to Luna text stream: %s", url)
+            async with websockets.connect(
+                url,
+                ping_interval=20,
+                ping_timeout=20,
+                close_timeout=5,
+                max_size=2 ** 20,
+            ) as ws:
+                _luna_stream_connected = True
+                logger.info("Luna text stream connected")
+
+                async for message in ws:
+                    text = _extract_luna_text_message(str(message))
+                    if not text:
+                        continue
+                    await on_new_text(
+                        text,
+                        {
+                            "source": "luna_ws",
+                            "prefetch": True,
+                        },
+                    )
+        except asyncio.CancelledError:
+            _luna_stream_connected = False
+            raise
+        except Exception as e:
+            _luna_stream_connected = False
+            if _get_luna_ws_enabled():
+                logger.warning("Luna stream disconnected: %s", e)
+            await asyncio.sleep(2.0)
+
+
 # ── Lifespan ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -165,10 +590,19 @@ async def lifespan(app: FastAPI):
     # Startup
     set_callback(on_new_text)
     await _set_clipboard_enabled(_clipboard_enabled)
+    await _ensure_deep_worker_running()
+    await _ensure_luna_stream_task()
     visible_host = "localhost" if _SERVER_HOST in {"0.0.0.0", "::"} else _SERVER_HOST
     logger.info("JP Grammar Analyzer backend started on ws://%s:%d/ws", visible_host, _SERVER_PORT)
     yield
     # Shutdown
+    await _stop_luna_stream_task()
+    if _deep_worker_task and not _deep_worker_task.done():
+        _deep_worker_task.cancel()
+        try:
+            await _deep_worker_task
+        except asyncio.CancelledError:
+            pass
     await _set_clipboard_enabled(False)
 
 
@@ -288,10 +722,17 @@ async def grammar_stats_alias():
 @app.post("/api/analyze")
 async def analyze_text(body: dict):
     """Manually trigger analysis via REST (useful for testing)."""
-    text = body.get("text", "").strip()
+    text = str(body.get("text", "")).strip()
     if not text:
         return {"error": "empty text"}
-    await on_new_text(text)
+    await on_new_text(
+        text,
+        {
+            "source": str(body.get("source", "api_manual") or "api_manual"),
+            "prefetch": _to_bool(body.get("prefetch", False), default=False),
+            "force": _to_bool(body.get("force", False), default=False),
+        },
+    )
     return {"status": "ok", "text": text}
 
 
@@ -593,6 +1034,139 @@ async def grammar_auto_learn_configure(body: dict):
     }
 
 
+@app.get("/api/deep/auto/status")
+async def deep_auto_status():
+    """Return deep analysis auto-trigger status."""
+    return {
+        "status": "ok",
+        "enabled": _get_deep_auto_analyze_enabled(),
+    }
+
+
+@app.post("/api/deep/auto/configure")
+async def deep_auto_configure(body: dict):
+    """Enable/disable automatic deep analysis on incoming text."""
+    enabled = _to_bool(body.get("enabled", True), default=True)
+    _set_deep_auto_analyze_enabled(enabled)
+    return {
+        "status": "ok",
+        "enabled": enabled,
+    }
+
+
+@app.get("/api/follow/status")
+async def follow_mode_status():
+    """Return follow mode status for prefetch display channel."""
+    return {
+        "status": "ok",
+        "enabled": _get_follow_mode_enabled(),
+    }
+
+
+@app.post("/api/follow/configure")
+async def follow_mode_configure(body: dict):
+    """Enable/disable follow mode for prefetch basic-result display."""
+    enabled = _to_bool(body.get("enabled", False), default=False)
+    _set_follow_mode_enabled(enabled)
+    return {
+        "status": "ok",
+        "enabled": enabled,
+    }
+
+
+@app.get("/api/resources/config")
+async def resources_config_get():
+    """Return external resource paths and Luna prefetch config."""
+    cfg = _resource_config_from_settings()
+    return {
+        "status": "ok",
+        **cfg,
+    }
+
+
+@app.post("/api/resources/configure")
+async def resources_configure(body: dict):
+    """Persist external resource paths and Luna prefetch stream settings."""
+    incoming = body if isinstance(body, dict) else {}
+    persisted: dict[str, str] = {}
+
+    if "dictionary_db_path" in incoming:
+        persisted["RESOURCE_DICT_DB_PATH"] = str(incoming.get("dictionary_db_path", "")).strip()
+    if "ginza_model_path" in incoming:
+        persisted["RESOURCE_GINZA_MODEL_PATH"] = str(incoming.get("ginza_model_path", "")).strip()
+    if "ginza_split_mode" in incoming:
+        persisted["RESOURCE_GINZA_SPLIT_MODE"] = _normalize_ginza_split_mode(
+            incoming.get("ginza_split_mode", "C")
+        )
+    if "dependency_focus_style" in incoming:
+        persisted["RESOURCE_DEPENDENCY_FOCUS_STYLE"] = _normalize_dependency_focus_style(
+            incoming.get("dependency_focus_style", "classic")
+        )
+    if "onnx_model_path" in incoming:
+        persisted["RESOURCE_ONNX_MODEL_PATH"] = str(incoming.get("onnx_model_path", "")).strip()
+    if "luna_ws_enabled" in incoming:
+        persisted["LUNA_WS_ENABLED"] = "on" if _to_bool(incoming.get("luna_ws_enabled", False), default=False) else "off"
+    if "luna_ws_origin_url" in incoming:
+        persisted["LUNA_WS_ORIGIN_URL"] = _normalize_luna_ws_origin_url(
+            incoming.get("luna_ws_origin_url", "")
+        )
+    if "queue_max_pending" in incoming:
+        raw = str(incoming.get("queue_max_pending", "")).strip()
+        try:
+            value = int(raw)
+        except Exception:
+            value = _get_queue_max_pending()
+        value = max(10, min(value, 5000))
+        persisted["JP_TOOL_QUEUE_MAX_PENDING"] = str(value)
+    if "queue_drop_prefetch_when_busy" in incoming:
+        persisted["JP_TOOL_QUEUE_DROP_PREFETCH_WHEN_BUSY"] = (
+            "on"
+            if _to_bool(incoming.get("queue_drop_prefetch_when_busy", True), default=True)
+            else "off"
+        )
+
+    save_runtime_settings(persisted)
+    await _stop_luna_stream_task()
+    await _ensure_luna_stream_task()
+
+    cfg = _resource_config_from_settings()
+    return {
+        "status": "ok",
+        **cfg,
+    }
+
+
+@app.get("/api/luna/stream/status")
+async def luna_stream_status():
+    """Return current Luna prefetch stream status."""
+    return {
+        "status": "ok",
+        "enabled": _get_luna_ws_enabled(),
+        "origin_url": _get_luna_ws_origin_url(),
+        "connected": _luna_stream_connected,
+    }
+
+
+@app.get("/api/analysis/queue/status")
+async def analysis_queue_status():
+    """Return deep analysis queue status."""
+    return {
+        "status": "ok",
+        **_deep_queue_status(),
+        "deep_auto_enabled": _get_deep_auto_analyze_enabled(),
+        "luna_stream_connected": _luna_stream_connected,
+    }
+
+
+@app.get("/api/ginza/status")
+async def ginza_status():
+    """Return GiNZA runtime availability and loaded model info."""
+    return {
+        "status": "ok",
+        **_get_ginza_runtime_status(),
+    }
+
+
 @app.get("/api/shortcuts/config")
 async def shortcuts_config_get():
     return {
@@ -669,6 +1243,25 @@ async def analysis_history_prune(body: dict):
     }
 
 
+@app.post("/api/analysis/history/delete")
+async def analysis_history_delete(body: dict):
+    """Delete one analysis record by exact source text."""
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return {
+            "status": "error",
+            "error": "empty text",
+            "deleted": 0,
+        }
+
+    deleted = await asyncio.to_thread(delete_history_by_text, text)
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "text": text,
+    }
+
+
 @app.get("/{asset_path:path}")
 async def serve_frontend_asset(asset_path: str):
     """Serve frontend static assets with SPA fallback for Flutter Web."""
@@ -714,47 +1307,140 @@ async def broadcast(message: str):
 
 # ── Analysis pipeline ────────────────────────────────────────────────────────
 
-async def on_new_text(text: str):
-    """Handle new text from clipboard or HTTP push."""
-    logger.info("New text: %s", text[:60])
-
-    # Phase 1: local grammar matching (no tokenization/dictionary required)
-    tokens = []
-    grammar_matches = []
-    try:
-        from analyzer.grammar_db import match_grammar
-        grammar_matches = match_grammar(text, tokens)
-    except Exception as e:
-        logger.error("Local grammar matching failed, fallback to deep-analysis-only mode: %s", e)
-
-    basic = BasicResult(
-        text=text,
-        tokens=tokens,
-        grammar_matches=grammar_matches,
-    )
-    await broadcast(basic.model_dump_json())
-    await asyncio.to_thread(upsert_basic_result, text, basic.model_dump_json())
-
-    # Phase 2: LLM deep analysis (async, optional)
-    from llm import get_provider
-    if get_provider() is None:
-        # Return an empty deep result to let clients close loading states.
-        await broadcast(DeepResult(text=text).model_dump_json())
+async def on_new_text(text: str, metadata: dict | None = None):
+    """Handle new text from clipboard/Luna/frontend, with queue+cache strategy."""
+    normalized = str(text or "").strip()
+    if not normalized:
         return
 
-    asyncio.create_task(_deep_analysis(text))
+    meta = metadata if isinstance(metadata, dict) else {}
+    source = str(meta.get("source", "unknown") or "unknown").strip() or "unknown"
+    prefetch = _to_bool(meta.get("prefetch", False), default=False)
+    force = _to_bool(meta.get("force", False), default=False)
+    follow_mode = _get_follow_mode_enabled()
+    should_broadcast = (not prefetch) or (prefetch and follow_mode)
+    logger.info(
+        "New text source=%s prefetch=%s force=%s: %s",
+        source,
+        prefetch,
+        force,
+        normalized[:60],
+    )
+
+    cached = await asyncio.to_thread(get_cached_result, normalized)
+
+    basic: BasicResult | None = None
+    if cached and isinstance(cached.get("basic_result"), dict):
+        try:
+            basic = BasicResult.model_validate(cached["basic_result"])
+        except Exception:
+            basic = None
+
+    if basic is not None and not basic.tokens:
+        # Backfill old cache entries (created before GiNZA token enrichment).
+        enriched_tokens = await asyncio.to_thread(_parse_tokens_with_optional_ginza, normalized)
+        if enriched_tokens:
+            basic = BasicResult(
+                text=basic.text,
+                tokens=enriched_tokens,
+                grammar_matches=basic.grammar_matches,
+            )
+            await asyncio.to_thread(upsert_basic_result, normalized, basic.model_dump_json())
+
+    if basic is None:
+        tokens = await asyncio.to_thread(_parse_tokens_with_optional_ginza, normalized)
+        grammar_matches = []
+        try:
+            from analyzer.grammar_db import match_grammar
+
+            grammar_matches = match_grammar(normalized, tokens)
+        except Exception as e:
+            logger.error("Local grammar matching failed, fallback to deep-analysis-only mode: %s", e)
+
+        basic = BasicResult(
+            text=normalized,
+            tokens=tokens,
+            grammar_matches=grammar_matches,
+        )
+        await asyncio.to_thread(upsert_basic_result, normalized, basic.model_dump_json())
+
+    if should_broadcast:
+        await broadcast(basic.model_dump_json())
+
+    from llm import get_provider
+
+    provider = get_provider()
+    cached_deep: DeepResult | None = None
+    if cached and isinstance(cached.get("deep_result"), dict):
+        try:
+            cached_deep = DeepResult.model_validate(cached["deep_result"])
+        except Exception:
+            cached_deep = None
+
+    if provider is None:
+        if should_broadcast:
+            await broadcast(
+                cached_deep.model_dump_json()
+                if cached_deep is not None
+                else DeepResult(text=normalized).model_dump_json()
+            )
+        return
+
+    if cached_deep is not None and not force:
+        if should_broadcast:
+            await broadcast(cached_deep.model_dump_json())
+        return
+
+    auto_enabled = _get_deep_auto_analyze_enabled()
+    should_enqueue = force or prefetch or auto_enabled
+    if not should_enqueue:
+        if not prefetch:
+            await broadcast(
+                DeepResult(
+                    text=normalized,
+                    cultural_context="深度分析已关闭（可在设置中开启自动深度分析，或手动触发）。",
+                ).model_dump_json()
+            )
+        return
+
+    priority = 10 if prefetch else 0
+    queued = await _enqueue_deep_analysis(
+        normalized,
+        priority=priority,
+        metadata={
+            "source": source,
+            "prefetch": prefetch,
+            "force": force,
+        },
+    )
+
+    if not queued and should_broadcast:
+        await broadcast(
+            DeepResult(
+                text=normalized,
+                cultural_context="深度分析队列拥塞，已跳过本次入队。可稍后重试或使用手动强制分析。",
+            ).model_dump_json()
+        )
 
 
-async def _deep_analysis(text: str):
-    """Run LLM-based deep grammar analysis and broadcast result."""
+async def _deep_analysis(
+    text: str,
+    *,
+    broadcast_result: bool = True,
+    source: str = "queue",
+):
+    """Run LLM-based deep grammar analysis, persist result, optionally broadcast."""
     try:
         from llm import get_provider
         provider = get_provider()
         if provider is None:
             return
+
+        logger.info("Deep analysis start source=%s: %s", source, text[:60])
         result = await provider.analyze(text)
         if result:
-            await broadcast(result.model_dump_json())
+            if broadcast_result:
+                await broadcast(result.model_dump_json())
 
             try:
                 await asyncio.to_thread(upsert_deep_result, text, result.model_dump_json())
@@ -770,20 +1456,22 @@ async def _deep_analysis(text: str):
             except Exception as learn_error:
                 logger.warning("Auto-learn skipped due error: %s", learn_error)
         else:
+            if broadcast_result:
+                await broadcast(
+                    DeepResult(
+                        text=text,
+                        cultural_context="深度分析返回为空，请稍后重试。",
+                    ).model_dump_json()
+                )
+    except Exception as e:
+        logger.exception("Deep analysis failed for text: %s", text[:80])
+        if broadcast_result:
             await broadcast(
                 DeepResult(
                     text=text,
-                    cultural_context="深度分析返回为空，请稍后重试。",
+                    cultural_context=f"深度分析失败：{e}",
                 ).model_dump_json()
             )
-    except Exception as e:
-        logger.exception("Deep analysis failed for text: %s", text[:80])
-        await broadcast(
-            DeepResult(
-                text=text,
-                cultural_context=f"深度分析失败：{e}",
-            ).model_dump_json()
-        )
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
@@ -799,10 +1487,23 @@ async def websocket_endpoint(ws: WebSocket):
             try:
                 msg = json.loads(data)
                 if msg.get("type") == "analyze" and msg.get("text"):
-                    await on_new_text(msg["text"])
+                    await on_new_text(
+                        str(msg["text"]),
+                        {
+                            "source": "frontend_ws",
+                            "prefetch": False,
+                            "force": _to_bool(msg.get("force", False), default=False),
+                        },
+                    )
             except json.JSONDecodeError:
                 if data.strip():
-                    await on_new_text(data.strip())
+                    await on_new_text(
+                        data.strip(),
+                        {
+                            "source": "frontend_ws",
+                            "prefetch": False,
+                        },
+                    )
     except WebSocketDisconnect:
         pass
     finally:

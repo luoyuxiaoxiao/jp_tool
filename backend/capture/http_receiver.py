@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -21,7 +23,16 @@ async def receive_text(body: dict):
 
     Expected body: {"text": "日本語テキスト"}
     """
-    text = body.get("text", "").strip()
+    payload = body if isinstance(body, dict) else {}
+    text = str(payload.get("text", "")).strip()
     if text and _text_callback:
-        await _text_callback(text)
+        try:
+            maybe = _text_callback(text, payload)
+            if inspect.isawaitable(maybe):
+                await maybe
+        except TypeError:
+            # Backward compatibility for old callback signature: cb(text)
+            maybe = _text_callback(text)
+            if inspect.isawaitable(maybe):
+                await maybe
     return {"status": "ok"}

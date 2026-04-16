@@ -55,6 +55,19 @@ backend/data/dicdir/
 # Runtime settings generated locally (may contain API keys)
 backend/storage/data/app_settings.db
 
+# Local cache / dictionary / model artifacts (can be re-generated or re-downloaded)
+cache/*.db
+cache/*.sqlite
+cache/*.sqlite3
+cache/models/
+cache/downloads/
+*.onnx
+*.gguf
+*.safetensors
+*.pth
+*.pt
+*.ckpt
+
 # Local env files
 .env
 .env.*

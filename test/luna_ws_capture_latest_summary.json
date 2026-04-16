@@ -1,0 +1,19 @@
+{
+  "url": "ws://127.0.0.1:2333/api/ws/text/origin",
+  "started_at": "2026-04-16T04:24:25.376325+00:00",
+  "ended_at": "2026-04-16T04:24:33.226168+00:00",
+  "connected": true,
+  "message_count": 1,
+  "parse_error_count": 1,
+  "top_level_key_frequency": {},
+  "samples": [
+    {
+      "received_at": "2026-04-16T04:24:28.218195+00:00",
+      "raw_type": "str",
+      "raw": "いろいろ考えたあげく、学校をやめることにした",
+      "json_error": "Expecting value: line 1 column 1 (char 0)",
+      "top_level_keys": []
+    }
+  ],
+  "errors": []
+}

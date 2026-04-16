@@ -10,6 +10,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/analysis_result.dart';
 
+String _normalizeGinzaSplitMode(Object? raw) {
+  final mode = (raw ?? '').toString().trim().toUpperCase();
+  if (mode == 'A' || mode == 'B' || mode == 'C') {
+    return mode;
+  }
+  return 'C';
+}
+
+String _normalizeDependencyFocusStyle(Object? raw) {
+  final style = (raw ?? '').toString().trim().toLowerCase();
+  if (style == 'classic' || style == 'vivid') {
+    return style;
+  }
+  return 'classic';
+}
+
 class LlmConfig {
   final String backend;
   final String ollamaModel;
@@ -125,6 +141,60 @@ class ShortcutConfig {
       };
 }
 
+class ExternalResourceConfig {
+  final String dictionaryDbPath;
+  final String ginzaModelPath;
+  final String ginzaSplitMode;
+  final String dependencyFocusStyle;
+  final String onnxModelPath;
+  final bool lunaWsEnabled;
+  final String lunaWsOriginUrl;
+  final int queueMaxPending;
+  final bool queueDropPrefetchWhenBusy;
+
+  const ExternalResourceConfig({
+    this.dictionaryDbPath = '',
+    this.ginzaModelPath = 'ja_ginza_electra',
+    this.ginzaSplitMode = 'C',
+    this.dependencyFocusStyle = 'classic',
+    this.onnxModelPath = '',
+    this.lunaWsEnabled = false,
+    this.lunaWsOriginUrl = '',
+    this.queueMaxPending = 120,
+    this.queueDropPrefetchWhenBusy = true,
+  });
+
+  factory ExternalResourceConfig.fromJson(Map<String, dynamic> j) =>
+      ExternalResourceConfig(
+        dictionaryDbPath: (j['dictionary_db_path'] ?? '').toString(),
+        ginzaModelPath: (j['ginza_model_path'] ?? '').toString(),
+        ginzaSplitMode: _normalizeGinzaSplitMode(j['ginza_split_mode']),
+        dependencyFocusStyle:
+            _normalizeDependencyFocusStyle(j['dependency_focus_style']),
+        onnxModelPath: (j['onnx_model_path'] ?? '').toString(),
+        lunaWsEnabled: j['luna_ws_enabled'] == true,
+        lunaWsOriginUrl: (j['luna_ws_origin_url'] ?? '').toString(),
+        queueMaxPending: (j['queue_max_pending'] is int)
+            ? j['queue_max_pending'] as int
+            : int.tryParse((j['queue_max_pending'] ?? '120').toString()) ?? 120,
+        queueDropPrefetchWhenBusy: j['queue_drop_prefetch_when_busy'] == true ||
+            (j['queue_drop_prefetch_when_busy']?.toString() == '1'),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'dictionary_db_path': dictionaryDbPath,
+        'ginza_model_path': ginzaModelPath,
+        'ginza_split_mode': _normalizeGinzaSplitMode(ginzaSplitMode),
+        'dependency_focus_style':
+            _normalizeDependencyFocusStyle(dependencyFocusStyle),
+        'onnx_model_path': onnxModelPath,
+        'luna_ws_enabled': lunaWsEnabled,
+        'luna_ws_origin_url': lunaWsOriginUrl,
+        'queue_max_pending': queueMaxPending,
+        'queue_drop_prefetch_when_busy': queueDropPrefetchWhenBusy,
+      };
+}
+
 class WebSocketService extends ChangeNotifier {
   static const int _defaultBackendPort = 8765;
   static const List<String> _windowEffectValues = [
@@ -152,7 +222,9 @@ class WebSocketService extends ChangeNotifier {
   String _serverUrl = 'ws://localhost:8765/ws';
   bool _llmEnabled = false;
   bool _clipboardEnabled = true;
+  bool _followModeEnabled = false;
   bool _grammarAutoLearnEnabled = true;
+  bool _deepAutoAnalyzeEnabled = true;
   bool _autoStartBackend = true;
   int? _managedBackendPid;
   int? _managedBackendPort;
@@ -166,6 +238,7 @@ class WebSocketService extends ChangeNotifier {
   bool _windowEffectInitialized = false;
   bool _startingManagedBackend = false;
   ShortcutConfig _shortcutConfig = const ShortcutConfig();
+  ExternalResourceConfig _resourceConfig = const ExternalResourceConfig();
   int _historyLimit = _defaultHistoryLimit;
 
   // Current analysis state
@@ -175,7 +248,9 @@ class WebSocketService extends ChangeNotifier {
   String get serverUrl => _serverUrl;
   bool get llmEnabled => _llmEnabled;
   bool get clipboardEnabled => _clipboardEnabled;
+  bool get followModeEnabled => _followModeEnabled;
   bool get grammarAutoLearnEnabled => _grammarAutoLearnEnabled;
+  bool get deepAutoAnalyzeEnabled => _deepAutoAnalyzeEnabled;
   bool get autoStartBackend => _autoStartBackend;
   int? get managedBackendPid => _managedBackendPid;
   int? get managedBackendPort => _managedBackendPort;
@@ -186,6 +261,7 @@ class WebSocketService extends ChangeNotifier {
   List<String> get backendLogs => List.unmodifiable(_backendLogs);
   bool get isManagedBackendRunning => _managedBackendPid != null;
   ShortcutConfig get shortcutConfig => _shortcutConfig;
+  ExternalResourceConfig get resourceConfig => _resourceConfig;
   int get historyLimit => _historyLimit;
 
   // History
@@ -201,7 +277,8 @@ class WebSocketService extends ChangeNotifier {
     if (trimmed != null && trimmed.isNotEmpty) {
       final uri = Uri.tryParse(trimmed);
       if (uri != null && _isLocalHost(uri.host)) {
-        _serverUrl = _localWsUrl(_defaultBackendPort);
+        final localPort = uri.hasPort ? uri.port : _defaultBackendPort;
+        _serverUrl = _localWsUrl(localPort);
       } else {
         _serverUrl = trimmed;
       }
@@ -272,8 +349,9 @@ class WebSocketService extends ChangeNotifier {
     _channel = null;
     _setConnected(false);
     if (_managedBackendPid == null && _managedBackendPort == null) {
+      final retryPort = _preferredLocalBackendPort();
       _reportBackendWarning(
-        '无法连接到后端，正在重试端口 8765（调试模式请先启动源码后端）',
+        '无法连接到后端，正在重试端口 $retryPort（调试模式请先启动源码后端）',
       );
       _scheduleReconnect(token);
       return;
@@ -346,8 +424,12 @@ class WebSocketService extends ChangeNotifier {
     await Future.wait([
       refreshLlmStatus(),
       refreshClipboardStatus(),
+      refreshFollowModeStatus(),
       refreshGrammarAutoLearnStatus(),
+      refreshDeepAutoAnalyzeStatus(),
+      refreshResourceConfig(),
       refreshShortcutConfig(),
+      refreshHistoryFromBackend(),
     ]);
   }
 
@@ -377,6 +459,27 @@ class WebSocketService extends ChangeNotifier {
     return true;
   }
 
+  Future<void> refreshFollowModeStatus() async {
+    final data = await _requestJson('GET', '/api/follow/status');
+    if (data == null) return;
+
+    _followModeEnabled = data['enabled'] == true;
+    notifyListeners();
+  }
+
+  Future<bool> setFollowModeEnabled(bool enabled) async {
+    final data = await _requestJson(
+      'POST',
+      '/api/follow/configure',
+      body: {'enabled': enabled},
+    );
+    if (data == null) return false;
+
+    _followModeEnabled = data['enabled'] == true;
+    notifyListeners();
+    return true;
+  }
+
   Future<void> refreshGrammarAutoLearnStatus() async {
     final data = await _requestJson('GET', '/api/grammar/auto-learn/status');
     if (data == null) return;
@@ -396,6 +499,109 @@ class WebSocketService extends ChangeNotifier {
     _grammarAutoLearnEnabled = data['enabled'] == true;
     notifyListeners();
     return true;
+  }
+
+  Future<void> refreshDeepAutoAnalyzeStatus() async {
+    final data = await _requestJson('GET', '/api/deep/auto/status');
+    if (data == null) return;
+
+    _deepAutoAnalyzeEnabled = data['enabled'] == true;
+    notifyListeners();
+  }
+
+  Future<bool> setDeepAutoAnalyzeEnabled(bool enabled) async {
+    final data = await _requestJson(
+      'POST',
+      '/api/deep/auto/configure',
+      body: {'enabled': enabled},
+    );
+    if (data == null) return false;
+
+    _deepAutoAnalyzeEnabled = data['enabled'] == true;
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> refreshResourceConfig() async {
+    final data = await _requestJson('GET', '/api/resources/config');
+    if (data == null) return;
+
+    _resourceConfig = ExternalResourceConfig.fromJson(data);
+    notifyListeners();
+  }
+
+  Future<ExternalResourceConfig?> getResourceConfig() async {
+    final data = await _requestJson('GET', '/api/resources/config');
+    if (data == null) return null;
+
+    final config = ExternalResourceConfig.fromJson(data);
+    _resourceConfig = config;
+    notifyListeners();
+    return config;
+  }
+
+  Future<bool> saveResourceConfig(ExternalResourceConfig config) async {
+    final data = await _requestJson(
+      'POST',
+      '/api/resources/configure',
+      body: config.toJson(),
+    );
+    if (data == null) return false;
+
+    _resourceConfig = ExternalResourceConfig.fromJson(data);
+    notifyListeners();
+    return data['status'] == 'ok';
+  }
+
+  Future<bool> setLunaWsEnabled(bool enabled) async {
+    final current = _resourceConfig;
+    return saveResourceConfig(
+      ExternalResourceConfig(
+        dictionaryDbPath: current.dictionaryDbPath,
+        ginzaModelPath: current.ginzaModelPath,
+        ginzaSplitMode: current.ginzaSplitMode,
+        dependencyFocusStyle: current.dependencyFocusStyle,
+        onnxModelPath: current.onnxModelPath,
+        lunaWsEnabled: enabled,
+        lunaWsOriginUrl: current.lunaWsOriginUrl,
+        queueMaxPending: current.queueMaxPending,
+        queueDropPrefetchWhenBusy: current.queueDropPrefetchWhenBusy,
+      ),
+    );
+  }
+
+  Future<bool> setGinzaSplitMode(String mode) async {
+    final current = _resourceConfig;
+    return saveResourceConfig(
+      ExternalResourceConfig(
+        dictionaryDbPath: current.dictionaryDbPath,
+        ginzaModelPath: current.ginzaModelPath,
+        ginzaSplitMode: _normalizeGinzaSplitMode(mode),
+        dependencyFocusStyle: current.dependencyFocusStyle,
+        onnxModelPath: current.onnxModelPath,
+        lunaWsEnabled: current.lunaWsEnabled,
+        lunaWsOriginUrl: current.lunaWsOriginUrl,
+        queueMaxPending: current.queueMaxPending,
+        queueDropPrefetchWhenBusy: current.queueDropPrefetchWhenBusy,
+      ),
+    );
+  }
+
+  Future<bool> setDependencyFocusStyle(String style) async {
+    final current = _resourceConfig;
+    return saveResourceConfig(
+      ExternalResourceConfig(
+        dictionaryDbPath: current.dictionaryDbPath,
+        ginzaModelPath: current.ginzaModelPath,
+        ginzaSplitMode: current.ginzaSplitMode,
+        dependencyFocusStyle: _normalizeDependencyFocusStyle(style),
+        onnxModelPath: current.onnxModelPath,
+        lunaWsEnabled: current.lunaWsEnabled,
+        lunaWsOriginUrl: current.lunaWsOriginUrl,
+        queueMaxPending: current.queueMaxPending,
+        queueDropPrefetchWhenBusy: current.queueDropPrefetchWhenBusy,
+      ),
+    );
   }
 
   Future<LlmConfig?> getLlmConfig() async {
@@ -463,6 +669,69 @@ class WebSocketService extends ChangeNotifier {
     notifyListeners();
     await _saveHistoryToPrefs();
     return true;
+  }
+
+  Future<void> refreshHistoryFromBackend() async {
+    final data = await _requestJson('GET', '/api/analysis/history');
+    if (data == null) return;
+
+    final rawItems = data['items'];
+    if (rawItems is! List) return;
+
+    final next = <BasicResult>[];
+    final seen = <String>{};
+
+    for (final row in rawItems) {
+      if (row is! Map) continue;
+      final map = Map<String, dynamic>.from(row);
+      final text = (map['text'] ?? '').toString().trim();
+      final key = _normalizedHistoryText(text);
+      if (key.isEmpty || seen.contains(key)) continue;
+
+      BasicResult item;
+      final basicRaw = map['basic_result'];
+      if (basicRaw is Map) {
+        try {
+          final basicMap = Map<String, dynamic>.from(basicRaw);
+          if ((basicMap['text'] ?? '').toString().trim().isEmpty) {
+            basicMap['text'] = text;
+          }
+          item = BasicResult.fromJson(basicMap);
+        } catch (_) {
+          item = BasicResult(text: text);
+        }
+      } else {
+        item = BasicResult(text: text);
+      }
+
+      next.add(item);
+      seen.add(key);
+    }
+
+    _history
+      ..clear()
+      ..addAll(next);
+    _trimHistoryToLimit();
+    notifyListeners();
+    await _saveHistoryToPrefs();
+  }
+
+  Future<bool> deleteHistoryItem(String text) async {
+    final normalized = text.trim();
+    if (normalized.isEmpty) return false;
+
+    final data = await _requestJson(
+      'POST',
+      '/api/analysis/history/delete',
+      body: {'text': normalized},
+    );
+
+    final key = _normalizedHistoryText(normalized);
+    _history.removeWhere((item) => _normalizedHistoryText(item.text) == key);
+    notifyListeners();
+    await _saveHistoryToPrefs();
+
+    return data != null && data['status'] == 'ok';
   }
 
   Future<void> clearHistory() async {
@@ -539,7 +808,7 @@ class WebSocketService extends ChangeNotifier {
       _managedBackendProcess = null;
     }
 
-    const port = _defaultBackendPort;
+    final port = _preferredLocalBackendPort();
     final existingReady = await _checkBackendReady(port);
     if (existingReady) {
       _managedBackendPid = null;
@@ -630,6 +899,21 @@ class WebSocketService extends ChangeNotifier {
   }
 
   String _localWsUrl(int port) => 'ws://127.0.0.1:$port/ws';
+
+  int _preferredLocalBackendPort() {
+    try {
+      final uri = Uri.parse(_serverUrl);
+      if (_isLocalHost(uri.host) && uri.hasPort) {
+        final port = uri.port;
+        if (port >= 1 && port <= 65535) {
+          return port;
+        }
+      }
+    } catch (_) {
+      // Ignore parse issues and fallback.
+    }
+    return _defaultBackendPort;
+  }
 
   Future<bool> _isPortAvailable(int port) async {
     ServerSocket? socket;
@@ -883,6 +1167,14 @@ class WebSocketService extends ChangeNotifier {
         _insertHistory(basic, notify: false);
       } else if (type == 'deep_result') {
         final deep = DeepResult.fromJson(json);
+        final currentText = _state.basic?.text.trim() ?? '';
+        final incomingText = deep.text.trim();
+
+        // Latest-wins: only apply deep result for the currently displayed text.
+        if (currentText.isNotEmpty && incomingText != currentText) {
+          return;
+        }
+
         _state = _state.copyWith(
           deep: _isEmptyDeepResult(deep) ? null : deep,
           isLoadingDeep: false,

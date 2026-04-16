@@ -10,6 +10,13 @@ class Token {
   final String posDetail;
   final String base;
   final String conjugation;
+  final int index;
+  final int headIndex;
+  final String dep;
+  final int charStart;
+  final int charEnd;
+  final String meaningZh;
+  final bool isPunctuation;
 
   const Token({
     required this.surface,
@@ -18,7 +25,19 @@ class Token {
     this.posDetail = '',
     this.base = '',
     this.conjugation = '',
+    this.index = 0,
+    this.headIndex = 0,
+    this.dep = '',
+    this.charStart = 0,
+    this.charEnd = 0,
+    this.meaningZh = '',
+    this.isPunctuation = false,
   });
+
+  static int _toInt(dynamic value, int fallback) {
+    if (value is int) return value;
+    return int.tryParse((value ?? '').toString()) ?? fallback;
+  }
 
   factory Token.fromJson(Map<String, dynamic> j) => Token(
         surface: j['surface'] ?? '',
@@ -27,6 +46,13 @@ class Token {
         posDetail: j['pos_detail'] ?? '',
         base: j['base'] ?? '',
         conjugation: j['conjugation'] ?? '',
+        index: _toInt(j['index'], 0),
+        headIndex: _toInt(j['head_index'], 0),
+        dep: j['dep'] ?? '',
+        charStart: _toInt(j['char_start'], 0),
+        charEnd: _toInt(j['char_end'], 0),
+        meaningZh: j['meaning_zh'] ?? '',
+        isPunctuation: j['is_punctuation'] == true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -36,6 +62,13 @@ class Token {
         'pos_detail': posDetail,
         'base': base,
         'conjugation': conjugation,
+        'index': index,
+        'head_index': headIndex,
+        'dep': dep,
+        'char_start': charStart,
+        'char_end': charEnd,
+        'meaning_zh': meaningZh,
+        'is_punctuation': isPunctuation,
       };
 }
 
