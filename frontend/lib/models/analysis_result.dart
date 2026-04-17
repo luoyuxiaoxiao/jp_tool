@@ -310,6 +310,7 @@ class DeepResult {
   final List<ComparisonGroup> comparisons;
   final List<CommonMistake> commonMistakes;
   final String culturalContext;
+  final String markdownAnalysis;
   final List<String> applications;
   final List<LevelAnnotation> levelAnnotations;
 
@@ -322,6 +323,7 @@ class DeepResult {
     this.comparisons = const [],
     this.commonMistakes = const [],
     this.culturalContext = '',
+    this.markdownAnalysis = '',
     this.applications = const [],
     this.levelAnnotations = const [],
   });
@@ -353,6 +355,7 @@ class DeepResult {
                 .toList() ??
             [],
         culturalContext: j['cultural_context'] ?? '',
+        markdownAnalysis: j['markdown_analysis'] ?? '',
         applications:
             (j['applications'] as List?)?.map((a) => a.toString()).toList() ??
                 [],

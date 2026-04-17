@@ -320,7 +320,18 @@ def _match_tokens(
     plen = len(pattern_seq)
     for i in range(len(tokens) - plen + 1):
         if all(_token_matches(tokens[i + j], cond) for j, cond in enumerate(pattern_seq)):
-            key = (entry["pattern"], i, i + plen)
+            match_start_idx = i
+            match_end_idx = i + plen
+
+            start_char = _token_char_start(tokens, match_start_idx)
+            end_char = _token_char_end(tokens, match_end_idx - 1)
+
+            if end_char <= start_char:
+                # Defensive fallback if char offsets are missing/invalid.
+                start_char = match_start_idx
+                end_char = match_end_idx
+
+            key = (entry["pattern"], start_char, end_char)
             if key not in seen:
                 seen.add(key)
                 matches.append(GrammarMatch(
@@ -329,9 +340,27 @@ def _match_tokens(
                     meaning_zh=entry.get("meaning_zh", ""),
                     meaning_ja=entry.get("meaning_ja", ""),
                     example=entry.get("example", ""),
-                    start=i,
-                    end=i + plen,
+                    start=start_char,
+                    end=end_char,
                 ))
+
+
+def _token_char_start(tokens: list[Token], idx: int) -> int:
+    if idx < 0 or idx >= len(tokens):
+        return idx
+    try:
+        return int(tokens[idx].char_start)
+    except Exception:
+        return idx
+
+
+def _token_char_end(tokens: list[Token], idx: int) -> int:
+    if idx < 0 or idx >= len(tokens):
+        return idx + 1
+    try:
+        return int(tokens[idx].char_end)
+    except Exception:
+        return idx + 1
 
 
 def _token_matches(token: Token, cond: dict) -> bool:

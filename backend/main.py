@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,6 +72,55 @@ def _resolve_server_port() -> int:
     return port
 
 
+def _resolve_parent_pid() -> int | None:
+    raw = str(os.environ.get("JP_TOOL_PARENT_PID", "")).strip()
+    if not raw:
+        return None
+
+    try:
+        pid = int(raw)
+    except Exception:
+        logger.warning("Invalid JP_TOOL_PARENT_PID=%r, parent watch disabled", raw)
+        return None
+
+    return pid if pid > 0 else None
+
+
+def _is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32
+
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+
+            try:
+                exit_code = wintypes.DWORD()
+                ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                if ok == 0:
+                    return False
+                return int(exit_code.value) == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
 _SERVER_HOST = _resolve_server_host()
 _SERVER_PORT = _resolve_server_port()
 
@@ -89,6 +139,47 @@ _deep_queue_dropped_prefetch = 0
 
 _luna_stream_task: asyncio.Task | None = None
 _luna_stream_connected = False
+_parent_watch_task: asyncio.Task | None = None
+
+
+async def _parent_watch_loop(parent_pid: int):
+    logger.info("Frontend parent watch enabled: pid=%d", parent_pid)
+
+    while True:
+        await asyncio.sleep(2.0)
+        if _is_pid_alive(parent_pid):
+            continue
+
+        logger.warning(
+            "Frontend parent process %d is not alive; backend will exit",
+            parent_pid,
+        )
+        os._exit(0)
+
+
+async def _stop_parent_watch_task():
+    global _parent_watch_task
+
+    if _parent_watch_task and not _parent_watch_task.done():
+        _parent_watch_task.cancel()
+        try:
+            await _parent_watch_task
+        except asyncio.CancelledError:
+            pass
+
+    _parent_watch_task = None
+
+
+async def _ensure_parent_watch_task():
+    global _parent_watch_task
+
+    parent_pid = _resolve_parent_pid()
+    if parent_pid is None:
+        await _stop_parent_watch_task()
+        return
+
+    if _parent_watch_task is None or _parent_watch_task.done():
+        _parent_watch_task = asyncio.create_task(_parent_watch_loop(parent_pid))
 
 
 def _text_key(text: str) -> str:
@@ -143,6 +234,54 @@ def _normalize_dependency_focus_style(raw: object) -> str:
     if style in {"classic", "vivid"}:
         return style
     return "classic"
+
+
+def _normalize_ollama_url(raw: object) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "http://127.0.0.1:11434"
+
+    try:
+        parts = urlsplit(text)
+    except Exception:
+        return text
+
+    host = (parts.hostname or "").strip().lower()
+    if host != "localhost":
+        return text
+
+    netloc = "127.0.0.1"
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    if parts.username:
+        auth = parts.username
+        if parts.password:
+            auth = f"{auth}:{parts.password}"
+        netloc = f"{auth}@{netloc}"
+
+    return urlunsplit(
+        (
+            parts.scheme or "http",
+            netloc,
+            parts.path,
+            parts.query,
+            parts.fragment,
+        )
+    )
+
+
+def _normalize_deep_prompt_profile(raw: object) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in {"markdown", "md"}:
+        return "markdown"
+    return "json"
+
+
+def _normalize_deep_render_profile(raw: object) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in {"markdown", "md"}:
+        return "markdown"
+    return "structured"
 
 
 async def _set_clipboard_enabled(enabled: bool):
@@ -289,6 +428,18 @@ def _resource_config_from_settings() -> dict[str, str | bool]:
                 settings.get("RESOURCE_ONNX_MODEL_PATH", ""),
             )
         ).strip(),
+        "deep_prompt_profile": _normalize_deep_prompt_profile(
+            os.environ.get(
+                "RESOURCE_DEEP_PROMPT_PROFILE",
+                settings.get("RESOURCE_DEEP_PROMPT_PROFILE", "json"),
+            )
+        ),
+        "deep_render_profile": _normalize_deep_render_profile(
+            os.environ.get(
+                "RESOURCE_DEEP_RENDER_PROFILE",
+                settings.get("RESOURCE_DEEP_RENDER_PROFILE", "structured"),
+            )
+        ),
         "luna_ws_enabled": _to_bool(luna_enabled_raw, default=False),
         "luna_ws_origin_url": luna_ws_origin,
         "queue_max_pending": queue_max_pending,
@@ -391,6 +542,52 @@ def _parse_tokens_with_optional_ginza(text: str) -> list:
     except Exception as exc:
         logger.warning("GiNZA parse skipped: %s", exc)
         return []
+
+
+def _normalize_cached_match_spans(basic: BasicResult) -> tuple[BasicResult, bool]:
+    """Migrate legacy token-index grammar spans to char-offset spans."""
+    if not basic.tokens or not basic.grammar_matches:
+        return basic, False
+
+    token_count = len(basic.tokens)
+    changed = False
+    migrated_matches = []
+
+    for match in basic.grammar_matches:
+        start = int(match.start)
+        end = int(match.end)
+
+        is_token_index_span = (
+            0 <= start < token_count
+            and 0 < end <= token_count
+            and end > start
+        )
+
+        if not is_token_index_span:
+            migrated_matches.append(match)
+            continue
+
+        start_char = int(basic.tokens[start].char_start)
+        end_char = int(basic.tokens[end - 1].char_end)
+        if end_char <= start_char:
+            migrated_matches.append(match)
+            continue
+
+        if start != start_char or end != end_char:
+            changed = True
+            migrated_matches.append(
+                match.model_copy(update={
+                    "start": start_char,
+                    "end": end_char,
+                })
+            )
+        else:
+            migrated_matches.append(match)
+
+    if not changed:
+        return basic, False
+
+    return basic.model_copy(update={"grammar_matches": migrated_matches}), True
 
 
 def _get_ginza_runtime_status() -> dict[str, object]:
@@ -605,11 +802,13 @@ async def lifespan(app: FastAPI):
     await _set_clipboard_enabled(_clipboard_enabled)
     await _ensure_deep_worker_running()
     await _ensure_luna_stream_task()
+    await _ensure_parent_watch_task()
     visible_host = "localhost" if _SERVER_HOST in {"0.0.0.0", "::"} else _SERVER_HOST
     logger.info("JP Grammar Analyzer backend started on ws://%s:%d/ws", visible_host, _SERVER_PORT)
     yield
     # Shutdown
     await _stop_luna_stream_task()
+    await _stop_parent_watch_task()
     if _deep_worker_task and not _deep_worker_task.done():
         _deep_worker_task.cancel()
         try:
@@ -778,7 +977,9 @@ async def llm_config_get():
     return {
         "backend": backend,
         "ollama_model": os.environ.get("OLLAMA_MODEL", settings.get("OLLAMA_MODEL", "qwen2.5:7b")),
-        "ollama_url": os.environ.get("OLLAMA_URL", settings.get("OLLAMA_URL", "http://localhost:11434")),
+        "ollama_url": _normalize_ollama_url(
+            os.environ.get("OLLAMA_URL", settings.get("OLLAMA_URL", "http://127.0.0.1:11434"))
+        ),
         "api_format": api_format,
         "api_base_url": os.environ.get("API_BASE_URL", settings.get("API_BASE_URL", "https://api.openai.com")),
         "api_model": os.environ.get("API_MODEL", settings.get("API_MODEL", "gpt-4o-mini")),
@@ -830,10 +1031,10 @@ async def llm_models(body: dict):
             body.get("ollama_model")
             or os.environ.get("OLLAMA_MODEL", settings.get("OLLAMA_MODEL", "qwen2.5:7b"))
         ).strip()
-        base_url = str(
+        base_url = _normalize_ollama_url(
             body.get("ollama_url")
-            or os.environ.get("OLLAMA_URL", settings.get("OLLAMA_URL", "http://localhost:11434"))
-        ).strip()
+            or os.environ.get("OLLAMA_URL", settings.get("OLLAMA_URL", "http://127.0.0.1:11434"))
+        )
 
         provider = OllamaProvider(base_url=base_url, model=model)
         models = await provider.list_models()
@@ -960,10 +1161,13 @@ async def llm_configure(body: dict):
     from llm import reconfigure
     backend = body.get("backend", "")
     kwargs = {}
+    normalized_ollama_url = None
+    if "ollama_url" in body:
+        normalized_ollama_url = _normalize_ollama_url(body.get("ollama_url"))
     if "ollama_model" in body:
         kwargs["OLLAMA_MODEL"] = body["ollama_model"]
-    if "ollama_url" in body:
-        kwargs["OLLAMA_URL"] = body["ollama_url"]
+    if normalized_ollama_url is not None:
+        kwargs["OLLAMA_URL"] = normalized_ollama_url
     if "anthropic_api_key" in body:
         kwargs["ANTHROPIC_API_KEY"] = body["anthropic_api_key"]
     if "api_key" in body:
@@ -980,8 +1184,8 @@ async def llm_configure(body: dict):
         persisted["JP_TOOL_LLM"] = backend
     if "ollama_model" in body:
         persisted["OLLAMA_MODEL"] = body["ollama_model"]
-    if "ollama_url" in body:
-        persisted["OLLAMA_URL"] = body["ollama_url"]
+    if normalized_ollama_url is not None:
+        persisted["OLLAMA_URL"] = normalized_ollama_url
     if "api_key" in body:
         persisted["API_KEY"] = body["api_key"]
     if "api_model" in body:
@@ -1144,6 +1348,14 @@ async def resources_configure(body: dict):
         )
     if "onnx_model_path" in incoming:
         persisted["RESOURCE_ONNX_MODEL_PATH"] = str(incoming.get("onnx_model_path", "")).strip()
+    if "deep_prompt_profile" in incoming:
+        persisted["RESOURCE_DEEP_PROMPT_PROFILE"] = _normalize_deep_prompt_profile(
+            incoming.get("deep_prompt_profile", "json")
+        )
+    if "deep_render_profile" in incoming:
+        persisted["RESOURCE_DEEP_RENDER_PROFILE"] = _normalize_deep_render_profile(
+            incoming.get("deep_render_profile", "structured")
+        )
     if "luna_ws_enabled" in incoming:
         persisted["LUNA_WS_ENABLED"] = "on" if _to_bool(incoming.get("luna_ws_enabled", False), default=False) else "off"
     if "luna_ws_origin_url" in incoming:
@@ -1519,6 +1731,11 @@ async def on_new_text(text: str, metadata: dict | None = None):
                 tokens=enriched_tokens,
                 grammar_matches=basic.grammar_matches,
             )
+            await asyncio.to_thread(upsert_basic_result, normalized, basic.model_dump_json())
+
+    if basic is not None:
+        basic, migrated = _normalize_cached_match_spans(basic)
+        if migrated:
             await asyncio.to_thread(upsert_basic_result, normalized, basic.model_dump_json())
 
     if basic is None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     from backend.storage.settings_store import load_env_from_db
@@ -30,7 +31,7 @@ def get_provider():
     1. JP_TOOL_LLM=ollama  -> Ollama (explicit)
     2. JP_TOOL_LLM=api     -> Generic API (openai/anthropic)
     3. JP_TOOL_LLM=claude  -> Anthropic API (compat alias)
-    4. JP_TOOL_LLM not set -> auto-detect Ollama at localhost:11434
+    4. JP_TOOL_LLM not set -> auto-detect Ollama at 127.0.0.1:11434
     """
     global _provider, _initialized
     if _initialized:
@@ -74,7 +75,9 @@ def _init_ollama(silent: bool = False):
     """Initialize Ollama provider."""
     global _provider
     model = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
-    base_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    base_url = _normalize_ollama_base_url(
+        os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+    )
 
     from .ollama_provider import OllamaProvider
     provider = OllamaProvider(base_url=base_url, model=model)
@@ -102,6 +105,40 @@ def _init_ollama(silent: bool = False):
     except Exception as e:
         if not silent:
             logger.warning("Cannot connect to Ollama at %s: %s", base_url, e)
+
+
+def _normalize_ollama_base_url(raw: object) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "http://127.0.0.1:11434"
+
+    try:
+        parts = urlsplit(text)
+    except Exception:
+        return text
+
+    host = (parts.hostname or "").strip().lower()
+    if host != "localhost":
+        return text
+
+    netloc = "127.0.0.1"
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    if parts.username:
+        auth = parts.username
+        if parts.password:
+            auth = f"{auth}:{parts.password}"
+        netloc = f"{auth}@{netloc}"
+
+    return urlunsplit(
+        (
+            parts.scheme or "http",
+            netloc,
+            parts.path,
+            parts.query,
+            parts.fragment,
+        )
+    )
 
 
 def _init_api(silent: bool = False, force_format: str | None = None):

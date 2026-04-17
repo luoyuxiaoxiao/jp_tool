@@ -26,6 +26,38 @@ String _normalizeDependencyFocusStyle(Object? raw) {
   return 'classic';
 }
 
+String _normalizeDeepPromptProfile(Object? raw) {
+  final mode = (raw ?? '').toString().trim().toLowerCase();
+  if (mode == 'markdown' || mode == 'md') {
+    return 'markdown';
+  }
+  return 'json';
+}
+
+String _normalizeDeepRenderProfile(Object? raw) {
+  final mode = (raw ?? '').toString().trim().toLowerCase();
+  if (mode == 'markdown' || mode == 'md') {
+    return 'markdown';
+  }
+  return 'structured';
+}
+
+String _normalizeOllamaUrl(Object? raw) {
+  final value = (raw ?? '').toString().trim();
+  if (value.isEmpty) {
+    return 'http://127.0.0.1:11434';
+  }
+
+  final lower = value.toLowerCase();
+  if (lower.startsWith('http://localhost')) {
+    return 'http://127.0.0.1${value.substring('http://localhost'.length)}';
+  }
+  if (lower.startsWith('https://localhost')) {
+    return 'https://127.0.0.1${value.substring('https://localhost'.length)}';
+  }
+  return value;
+}
+
 class LlmConfig {
   final String backend;
   final String ollamaModel;
@@ -39,7 +71,7 @@ class LlmConfig {
   const LlmConfig({
     this.backend = 'auto',
     this.ollamaModel = 'qwen2.5:7b',
-    this.ollamaUrl = 'http://localhost:11434',
+    this.ollamaUrl = 'http://127.0.0.1:11434',
     this.apiFormat = 'openai',
     this.apiBaseUrl = 'https://api.openai.com',
     this.apiModel = 'gpt-4o-mini',
@@ -50,7 +82,7 @@ class LlmConfig {
   factory LlmConfig.fromJson(Map<String, dynamic> j) => LlmConfig(
         backend: (j['backend'] ?? 'auto').toString(),
         ollamaModel: (j['ollama_model'] ?? 'qwen2.5:7b').toString(),
-        ollamaUrl: (j['ollama_url'] ?? 'http://localhost:11434').toString(),
+        ollamaUrl: _normalizeOllamaUrl(j['ollama_url']),
         apiFormat: (j['api_format'] ?? 'openai').toString(),
         apiBaseUrl: (j['api_base_url'] ?? 'https://api.openai.com').toString(),
         apiModel: (j['api_model'] ?? 'gpt-4o-mini').toString(),
@@ -61,7 +93,7 @@ class LlmConfig {
   Map<String, dynamic> toJson() => {
         'backend': backend,
         'ollama_model': ollamaModel,
-        'ollama_url': ollamaUrl,
+        'ollama_url': _normalizeOllamaUrl(ollamaUrl),
         'api_format': apiFormat,
         'api_base_url': apiBaseUrl,
         'api_model': apiModel,
@@ -152,6 +184,8 @@ class ExternalResourceConfig {
   final String ginzaSplitMode;
   final String dependencyFocusStyle;
   final String onnxModelPath;
+  final String deepPromptProfile;
+  final String deepRenderProfile;
   final bool lunaWsEnabled;
   final String lunaWsOriginUrl;
   final int queueMaxPending;
@@ -163,6 +197,8 @@ class ExternalResourceConfig {
     this.ginzaSplitMode = 'C',
     this.dependencyFocusStyle = 'classic',
     this.onnxModelPath = '',
+    this.deepPromptProfile = 'json',
+    this.deepRenderProfile = 'structured',
     this.lunaWsEnabled = false,
     this.lunaWsOriginUrl = '',
     this.queueMaxPending = 120,
@@ -177,6 +213,10 @@ class ExternalResourceConfig {
         dependencyFocusStyle:
             _normalizeDependencyFocusStyle(j['dependency_focus_style']),
         onnxModelPath: (j['onnx_model_path'] ?? '').toString(),
+        deepPromptProfile:
+            _normalizeDeepPromptProfile(j['deep_prompt_profile']),
+        deepRenderProfile:
+            _normalizeDeepRenderProfile(j['deep_render_profile']),
         lunaWsEnabled: j['luna_ws_enabled'] == true,
         lunaWsOriginUrl: (j['luna_ws_origin_url'] ?? '').toString(),
         queueMaxPending: (j['queue_max_pending'] is int)
@@ -193,6 +233,8 @@ class ExternalResourceConfig {
         'dependency_focus_style':
             _normalizeDependencyFocusStyle(dependencyFocusStyle),
         'onnx_model_path': onnxModelPath,
+        'deep_prompt_profile': _normalizeDeepPromptProfile(deepPromptProfile),
+        'deep_render_profile': _normalizeDeepRenderProfile(deepRenderProfile),
         'luna_ws_enabled': lunaWsEnabled,
         'luna_ws_origin_url': lunaWsOriginUrl,
         'queue_max_pending': queueMaxPending,
@@ -291,7 +333,7 @@ class WebSocketService extends ChangeNotifier {
   int _connectionToken = 0;
   bool _shouldReconnect = true;
   bool _connected = false;
-  String _serverUrl = 'ws://localhost:8865/ws';
+  String _serverUrl = 'ws://127.0.0.1:8865/ws';
   bool _llmEnabled = false;
   bool _clipboardEnabled = true;
   bool _followModeEnabled = false;
@@ -424,6 +466,9 @@ class WebSocketService extends ChangeNotifier {
       _reportBackendWarning(
         '无法连接到后端，正在重试端口 $retryPort（调试模式请先启动源码后端）',
       );
+      if (_shouldReconnect && _shouldAutoManageBackend()) {
+        unawaited(_startManagedBackendIfNeeded());
+      }
       _scheduleReconnect(token);
       return;
     }
@@ -677,6 +722,8 @@ class WebSocketService extends ChangeNotifier {
         ginzaSplitMode: current.ginzaSplitMode,
         dependencyFocusStyle: current.dependencyFocusStyle,
         onnxModelPath: current.onnxModelPath,
+        deepPromptProfile: current.deepPromptProfile,
+        deepRenderProfile: current.deepRenderProfile,
         lunaWsEnabled: enabled,
         lunaWsOriginUrl: current.lunaWsOriginUrl,
         queueMaxPending: current.queueMaxPending,
@@ -694,6 +741,8 @@ class WebSocketService extends ChangeNotifier {
         ginzaSplitMode: _normalizeGinzaSplitMode(mode),
         dependencyFocusStyle: current.dependencyFocusStyle,
         onnxModelPath: current.onnxModelPath,
+        deepPromptProfile: current.deepPromptProfile,
+        deepRenderProfile: current.deepRenderProfile,
         lunaWsEnabled: current.lunaWsEnabled,
         lunaWsOriginUrl: current.lunaWsOriginUrl,
         queueMaxPending: current.queueMaxPending,
@@ -711,6 +760,8 @@ class WebSocketService extends ChangeNotifier {
         ginzaSplitMode: current.ginzaSplitMode,
         dependencyFocusStyle: _normalizeDependencyFocusStyle(style),
         onnxModelPath: current.onnxModelPath,
+        deepPromptProfile: current.deepPromptProfile,
+        deepRenderProfile: current.deepRenderProfile,
         lunaWsEnabled: current.lunaWsEnabled,
         lunaWsOriginUrl: current.lunaWsOriginUrl,
         queueMaxPending: current.queueMaxPending,
@@ -923,13 +974,32 @@ class WebSocketService extends ChangeNotifier {
   }
 
   Future<bool> stopManagedBackendNow() async {
-    final pid = _managedBackendPid;
-    if (pid == null || kIsWeb || !Platform.isWindows) return false;
+    if (kIsWeb || !Platform.isWindows) return false;
 
+    var pid = _managedBackendPid;
+    final managedPort = _managedBackendPort;
+    final fallbackPort = managedPort ?? _preferredLocalBackendPort();
+    if (pid == null) {
+      pid = await _resolveListeningPidByPort(fallbackPort);
+      if (pid != null) {
+        _appendBackendLog(
+            '[frontend] resolved backend pid from port $fallbackPort: $pid');
+      }
+    }
+    if (pid == null) return false;
+
+    var killed = false;
     try {
-      await Process.run('taskkill', ['/PID', '$pid', '/T', '/F']);
+      final result =
+          await Process.run('taskkill', ['/PID', '$pid', '/T', '/F']);
+      killed = result.exitCode == 0;
     } catch (e) {
       debugPrint('Stop managed backend failed: $e');
+    }
+
+    if (!killed) {
+      final stillAlive = await _isProcessRunning(pid);
+      killed = !stillAlive;
     }
 
     await _backendStdoutSub?.cancel();
@@ -938,9 +1008,10 @@ class WebSocketService extends ChangeNotifier {
     _backendStderrSub = null;
     _managedBackendPid = null;
     _managedBackendPort = null;
+    _managedBackendError = null;
     _appendBackendLog('[frontend] managed backend stopped');
     notifyListeners();
-    return true;
+    return killed;
   }
 
   Future<bool> _startManagedBackendIfNeeded({bool force = false}) async {
@@ -1320,10 +1391,58 @@ class WebSocketService extends ChangeNotifier {
     return null;
   }
 
+  int? _resolveListeningPidByPortSync(int port) {
+    if (kIsWeb || !Platform.isWindows) {
+      return null;
+    }
+
+    try {
+      final result = Process.runSync('netstat', ['-ano', '-p', 'tcp']);
+      if (result.exitCode != 0) {
+        return null;
+      }
+
+      final output = (result.stdout ?? '').toString();
+      final lines = const LineSplitter().convert(output);
+      for (final line in lines) {
+        final text = line.trim();
+        if (!text.toUpperCase().startsWith('TCP')) {
+          continue;
+        }
+
+        final parts = text.split(RegExp(r'\s+'));
+        if (parts.length < 5) {
+          continue;
+        }
+
+        final localAddress = parts[1];
+        final state = parts[3].toUpperCase();
+        final pidRaw = parts[4];
+
+        if (!localAddress.endsWith(':$port')) {
+          continue;
+        }
+        if (state != 'LISTENING') {
+          continue;
+        }
+
+        final pid = int.tryParse(pidRaw);
+        if (pid != null && pid > 0) {
+          return pid;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
   Map<String, String> _buildBackendEnvironment(int port) {
     return <String, String>{
       ...Platform.environment,
       'JP_TOOL_PORT': '$port',
+      'JP_TOOL_PARENT_PID': '$pid',
       'PYTHONUTF8': '1',
     };
   }
@@ -1493,6 +1612,7 @@ class WebSocketService extends ChangeNotifier {
         deep.comparisons.isEmpty &&
         deep.commonMistakes.isEmpty &&
         deep.culturalContext.trim().isEmpty &&
+        deep.markdownAnalysis.trim().isEmpty &&
         deep.applications.isEmpty &&
         deep.levelAnnotations.isEmpty;
   }
@@ -1644,7 +1764,14 @@ class WebSocketService extends ChangeNotifier {
 
   @override
   void dispose() {
-    final pid = _managedBackendPid;
+    disconnect();
+    _cancelReconnectTimer();
+
+    var pid = _managedBackendPid;
+    if (!kIsWeb && Platform.isWindows && pid == null) {
+      final fallbackPort = _managedBackendPort ?? _preferredLocalBackendPort();
+      pid = _resolveListeningPidByPortSync(fallbackPort);
+    }
     if (!kIsWeb && Platform.isWindows && pid != null) {
       try {
         Process.runSync('taskkill', ['/PID', '$pid', '/T', '/F']);
@@ -1655,9 +1782,8 @@ class WebSocketService extends ChangeNotifier {
 
     unawaited(_backendStdoutSub?.cancel());
     unawaited(_backendStderrSub?.cancel());
-    unawaited(stopManagedBackendNow());
-    _cancelReconnectTimer();
-    disconnect();
+    _managedBackendPid = null;
+    _managedBackendPort = null;
     super.dispose();
   }
 }

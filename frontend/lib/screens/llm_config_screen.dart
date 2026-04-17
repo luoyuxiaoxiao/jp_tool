@@ -330,7 +330,7 @@ class _LlmConfigScreenState extends State<LlmConfigScreen> {
                       controller: _ollamaUrlCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Ollama 地址',
-                        hintText: 'http://localhost:11434',
+                        hintText: 'http://127.0.0.1:11434',
                         border: OutlineInputBorder(),
                       ),
                       validator: (v) {

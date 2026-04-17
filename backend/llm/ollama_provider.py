@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(BaseLLMProvider):
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "qwen2.5:7b"):
+    def __init__(self, base_url: str = "http://127.0.0.1:11434", model: str = "qwen2.5:7b"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self._available = None  # cached availability check

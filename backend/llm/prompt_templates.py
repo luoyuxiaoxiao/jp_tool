@@ -1,6 +1,13 @@
 """Prompt templates for LLM-based deep grammar analysis."""
 
-ANALYSIS_PROMPT = """\
+from __future__ import annotations
+
+import os
+
+PROMPT_PROFILE_JSON = "json"
+PROMPT_PROFILE_MARKDOWN = "markdown"
+
+ANALYSIS_PROMPT_JSON = """\
 你是日语语法讲解专家。请分析下面的日语句子，并严格返回一个可被 json.loads 解析的 JSON 对象。
 
 分析目标：
@@ -24,7 +31,7 @@ ANALYSIS_PROMPT = """\
   - comparisons 建议至少 1 组且每组 >=2 条（确实无可比时可为空）
   - cultural_context 如有内容，尽量给出更具体中文说明（建议 >=60 字）
 
-输出 JSON 结构（字段名必须完全一致）：
+输出 JSON 结构（字段名必须完全一致，以下是一个模板实例）：
 {{
   "core_grammar": [
     {{
@@ -94,6 +101,57 @@ ANALYSIS_PROMPT = """\
 }}
 """
 
+# Backward-compatible alias for old imports.
+ANALYSIS_PROMPT = ANALYSIS_PROMPT_JSON
 
-def build_analysis_prompt(text: str) -> str:
-    return ANALYSIS_PROMPT.format(text=text)
+ANALYSIS_PROMPT_MARKDOWN = """\
+你是日语语法讲解专家。请对下面句子做深入讲解，并直接输出 Markdown 正文。
+
+分析目标：
+{text}
+
+输出要求：
+1. 只输出 Markdown 正文，不要输出 JSON，不要输出“下面开始分析”等额外客套。
+2. 解释使用简体中文；日语表达、语法项、例句请保留日文原文。
+3. 按以下层级组织内容（标题文案可微调，但层级请保留）：
+   - # 句子总览
+   - # 核心语法点
+     - ## 语法点1
+     - ## 语法点2
+   - # 逐片段拆解
+   - # 易错点与替换表达
+   - # 语境与语感
+   - # 练习建议（可选）
+4. 每个核心语法点尽量覆盖：接续/结构、核心含义、语气限制、近义对比、例句与中文释义。
+5. 内容要实用、可学习迁移，避免空洞总结。
+6. 不要用 Markdown 代码块包裹整段答案。
+
+请直接开始输出 Markdown。
+"""
+
+
+def normalize_prompt_profile(raw: object | None) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in {"markdown", "md"}:
+        return PROMPT_PROFILE_MARKDOWN
+    return PROMPT_PROFILE_JSON
+
+
+def get_prompt_profile() -> str:
+    return normalize_prompt_profile(
+        os.environ.get("RESOURCE_DEEP_PROMPT_PROFILE", PROMPT_PROFILE_JSON)
+    )
+
+
+def build_analysis_prompt(text: str, prompt_profile: str | None = None) -> str:
+    profile = normalize_prompt_profile(
+        prompt_profile
+        if prompt_profile is not None
+        else os.environ.get("RESOURCE_DEEP_PROMPT_PROFILE", PROMPT_PROFILE_JSON)
+    )
+    template = (
+        ANALYSIS_PROMPT_MARKDOWN
+        if profile == PROMPT_PROFILE_MARKDOWN
+        else ANALYSIS_PROMPT_JSON
+    )
+    return template.format(text=text)

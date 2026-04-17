@@ -27,11 +27,24 @@ class BaseLLMProvider(ABC):
 
     async def analyze(self, text: str) -> DeepResult | None:
         """Run deep grammar analysis on the given Japanese text."""
-        from .prompt_templates import build_analysis_prompt
-        prompt = build_analysis_prompt(text)
+        from .prompt_templates import (
+            PROMPT_PROFILE_MARKDOWN,
+            build_analysis_prompt,
+            get_prompt_profile,
+        )
+
+        prompt_profile = get_prompt_profile()
+        prompt = build_analysis_prompt(text, prompt_profile=prompt_profile)
 
         try:
             raw = await self._call(prompt)
+
+            if prompt_profile == PROMPT_PROFILE_MARKDOWN:
+                markdown = self._extract_markdown(raw)
+                if not markdown:
+                    markdown = "（模型返回为空）"
+                return DeepResult(text=text, markdown_analysis=markdown)
+
             parsed = self._parse_response(text, raw)
 
             # If provider returned rich but non-JSON text, try one repair pass.
@@ -51,6 +64,11 @@ class BaseLLMProvider(ABC):
             return parsed
         except Exception as e:
             logger.exception("LLM analysis failed")
+            if prompt_profile == PROMPT_PROFILE_MARKDOWN:
+                return DeepResult(
+                    text=text,
+                    markdown_analysis=f"## 深度分析暂时失败\n\n{e}",
+                )
             return DeepResult(
                 text=text,
                 cultural_context=f"深度分析暂时失败：{e}",
@@ -188,6 +206,18 @@ class BaseLLMProvider(ABC):
 
         return raw.strip()
 
+    def _extract_markdown(self, raw: str) -> str:
+        """Extract markdown body from raw response, unwrapping code fences if present."""
+        m = re.search(r"```(?:markdown|md)\s*\n?(.*?)```", raw, re.DOTALL | re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+        m = re.search(r"```\s*\n?(.*?)```", raw, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+
+        return (raw or "").strip()
+
     def _fix_json(self, s: str) -> str:
         """Fix common JSON issues from LLM output."""
         # Remove trailing commas before } or ]
@@ -268,6 +298,7 @@ class BaseLLMProvider(ABC):
             comparisons=self._safe_comparisons(data.get("comparisons", [])),
             common_mistakes=self._safe_list(data, "common_mistakes", CommonMistake),
             cultural_context=str(data.get("cultural_context", "")),
+            markdown_analysis=str(data.get("markdown_analysis", "")),
             applications=[str(a) for a in data.get("applications", []) if a],
             level_annotations=self._safe_list(data, "level_annotations", LevelAnnotation),
         )

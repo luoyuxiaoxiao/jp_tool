@@ -68,6 +68,8 @@ class _ExternalResourceConfigScreenState
   late final TextEditingController _onnxPathController;
   String _ginzaSplitMode = 'C';
   String _dependencyFocusStyle = 'classic';
+  String _deepPromptProfile = 'json';
+  String _deepRenderProfile = 'structured';
   bool _ginzaEnabled = false;
   String _ginzaStatusText = 'GiNZA 未启动';
   bool _ginzaPackageInstalled = false;
@@ -111,6 +113,8 @@ class _ExternalResourceConfigScreenState
       _ginzaSplitMode = _normalizeGinzaSplitMode(cfg.ginzaSplitMode);
       _dependencyFocusStyle =
           _normalizeDependencyFocusStyle(cfg.dependencyFocusStyle);
+      _deepPromptProfile = _normalizeDeepPromptProfile(cfg.deepPromptProfile);
+      _deepRenderProfile = _normalizeDeepRenderProfile(cfg.deepRenderProfile);
       _ginzaEnabled = status?.enabled ?? false;
       _ginzaStatusText = status == null
           ? 'GiNZA 状态未知'
@@ -140,6 +144,8 @@ class _ExternalResourceConfigScreenState
         ginzaSplitMode: _ginzaSplitMode,
         dependencyFocusStyle: _dependencyFocusStyle,
         onnxModelPath: _onnxPathController.text.trim(),
+        deepPromptProfile: _deepPromptProfile,
+        deepRenderProfile: _deepRenderProfile,
         lunaWsEnabled: current.lunaWsEnabled,
         lunaWsOriginUrl: current.lunaWsOriginUrl,
         queueMaxPending: current.queueMaxPending,
@@ -165,6 +171,8 @@ class _ExternalResourceConfigScreenState
         ginzaSplitMode: current.ginzaSplitMode,
         dependencyFocusStyle: current.dependencyFocusStyle,
         onnxModelPath: current.onnxModelPath,
+        deepPromptProfile: current.deepPromptProfile,
+        deepRenderProfile: current.deepRenderProfile,
         lunaWsEnabled: current.lunaWsEnabled,
         lunaWsOriginUrl: current.lunaWsOriginUrl,
         queueMaxPending: current.queueMaxPending,
@@ -365,6 +373,38 @@ class _ExternalResourceConfigScreenState
               border: OutlineInputBorder(),
             ),
           ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _deepPromptProfile == 'markdown',
+            onChanged: (value) {
+              setState(() {
+                _deepPromptProfile = value ? 'markdown' : 'json';
+              });
+            },
+            title: const Text('深度提示词使用 Markdown 模式'),
+            subtitle: Text(
+              _deepPromptProfile == 'markdown'
+                  ? '当前：Markdown 提示词（自由讲解）'
+                  : '当前：JSON 提示词（结构化旧方案）',
+            ),
+          ),
+          const SizedBox(height: 2),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _deepRenderProfile == 'markdown',
+            onChanged: (value) {
+              setState(() {
+                _deepRenderProfile = value ? 'markdown' : 'structured';
+              });
+            },
+            title: const Text('深度结果使用 Markdown 渲染'),
+            subtitle: Text(
+              _deepRenderProfile == 'markdown'
+                  ? '当前：Markdown 渲染（新）'
+                  : '当前：结构化组件渲染（旧）',
+            ),
+          ),
           const SizedBox(height: 14),
           FilledButton.icon(
             onPressed: _saving ? null : _save,
@@ -434,6 +474,8 @@ class _LunaRelatedConfigScreenState extends State<LunaRelatedConfigScreen> {
         ginzaSplitMode: current.ginzaSplitMode,
         dependencyFocusStyle: current.dependencyFocusStyle,
         onnxModelPath: current.onnxModelPath,
+        deepPromptProfile: current.deepPromptProfile,
+        deepRenderProfile: current.deepRenderProfile,
         lunaWsEnabled: current.lunaWsEnabled,
         lunaWsOriginUrl: _lunaWsController.text.trim(),
         queueMaxPending: queueMax.clamp(10, 5000),
@@ -523,4 +565,20 @@ String _normalizeDependencyFocusStyle(String raw) {
     return style;
   }
   return 'classic';
+}
+
+String _normalizeDeepPromptProfile(String raw) {
+  final mode = raw.trim().toLowerCase();
+  if (mode == 'markdown' || mode == 'md') {
+    return 'markdown';
+  }
+  return 'json';
+}
+
+String _normalizeDeepRenderProfile(String raw) {
+  final mode = raw.trim().toLowerCase();
+  if (mode == 'markdown' || mode == 'md') {
+    return 'markdown';
+  }
+  return 'structured';
 }

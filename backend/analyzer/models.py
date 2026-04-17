@@ -29,8 +29,8 @@ class GrammarMatch(BaseModel):
     meaning_zh: str = ""
     meaning_ja: str = ""
     example: str = ""
-    start: int = 0         # token start index
-    end: int = 0           # token end index
+    start: int = 0         # char offset in source text
+    end: int = 0           # char offset in source text
 
 
 class BasicResult(BaseModel):
@@ -110,5 +110,6 @@ class DeepResult(BaseModel):
     comparisons: list[ComparisonGroup] = []
     common_mistakes: list[CommonMistake] = []
     cultural_context: str = ""
+    markdown_analysis: str = ""
     applications: list[str] = []
     level_annotations: list[LevelAnnotation] = []

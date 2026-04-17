@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import '../models/analysis_result.dart';
 import '../services/websocket_service.dart';
@@ -595,23 +596,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
               if (deep != null) ...[
                 const Divider(height: 32),
-                CoreGrammarView(points: deep.coreGrammar),
-                const SizedBox(height: 16),
-                SentenceBreakdown(components: deep.sentenceBreakdown),
-                const SizedBox(height: 16),
-                GrammarTree(nodes: deep.grammarTree),
-                const SizedBox(height: 16),
-                ComparisonTable(groups: deep.comparisons),
-                const SizedBox(height: 16),
-                CommonMistakesView(mistakes: deep.commonMistakes),
-                if (deep.culturalContext.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  _buildLongTextSection('文化语境', deep.culturalContext),
-                ],
-                if (deep.applications.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  _buildListSection('应用拓展', deep.applications),
-                ],
+                if (ws.resourceConfig.deepRenderProfile == 'markdown')
+                  _buildMarkdownDeepSection(
+                    deep: deep,
+                    markdownPromptEnabled:
+                        ws.resourceConfig.deepPromptProfile == 'markdown',
+                  )
+                else
+                  ..._buildStructuredDeepSections(deep),
               ],
               const SizedBox(height: 32),
             ],
@@ -647,6 +639,75 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   style: const TextStyle(fontSize: 14, height: 1.5),
                 ),
               ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _buildStructuredDeepSections(DeepResult deep) {
+    return [
+      CoreGrammarView(points: deep.coreGrammar),
+      const SizedBox(height: 16),
+      SentenceBreakdown(components: deep.sentenceBreakdown),
+      const SizedBox(height: 16),
+      GrammarTree(nodes: deep.grammarTree),
+      const SizedBox(height: 16),
+      ComparisonTable(groups: deep.comparisons),
+      const SizedBox(height: 16),
+      CommonMistakesView(mistakes: deep.commonMistakes),
+      if (deep.culturalContext.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        _buildLongTextSection('文化语境', deep.culturalContext),
+      ],
+      if (deep.applications.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        _buildListSection('应用拓展', deep.applications),
+      ],
+    ];
+  }
+
+  Widget _buildMarkdownDeepSection({
+    required DeepResult deep,
+    required bool markdownPromptEnabled,
+  }) {
+    final markdown = deep.markdownAnalysis.trim();
+    if (markdown.isEmpty) {
+      final message = markdownPromptEnabled
+          ? '当前为 Markdown 渲染，但本次深度分析没有返回 Markdown 内容，请重试。'
+          : '当前为 Markdown 渲染，但提示词模式仍是 JSON。可在设置-资源配置中开启“深度提示词使用 Markdown 模式”后重新解析。';
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white10,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Text(message, style: const TextStyle(fontSize: 13)),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('深度分析（Markdown）', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white10,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: MarkdownBody(
+            data: markdown,
+            selectable: true,
+            styleSheet:
+                MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+              p: const TextStyle(fontSize: 14, height: 1.6),
             ),
           ),
         ),
