@@ -56,7 +56,7 @@ class GrammarHighlight extends StatelessWidget {
   }
 
   Widget _buildRichTextFallback(List<String?> charLevels) {
-    final spans = <TextSpan>[];
+    final items = <Widget>[];
     int i = 0;
     while (i < text.length) {
       final lvl = charLevels[i];
@@ -65,24 +65,19 @@ class GrammarHighlight extends StatelessWidget {
         j++;
       }
       final segment = text.substring(i, j);
-      spans.add(
-        TextSpan(
-          text: segment,
-          style: cjkTextStyle(
-            segment,
-            const TextStyle(),
-            fontSize: 22,
-            color: Colors.white,
-            decoration:
-                lvl != null ? TextDecoration.underline : TextDecoration.none,
-            decorationColor: lvl != null ? JlptColors.of(lvl) : null,
-            decorationThickness: 3,
-          ),
+      items.add(
+        Padding(
+          padding: const EdgeInsets.only(right: 1, bottom: 4),
+          child: _buildLeveledSurfaceText(segment, lvl),
         ),
       );
       i = j;
     }
-    return RichText(text: TextSpan(children: spans));
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.end,
+      children: items,
+    );
   }
 
   Widget? _buildRubyText(List<String?> charLevels) {
@@ -127,21 +122,7 @@ class GrammarHighlight extends StatelessWidget {
                     height: 1.0,
                   ),
                 ),
-                Text(
-                  surface,
-                  style: cjkTextStyle(
-                    surface,
-                    const TextStyle(),
-                    fontSize: 22,
-                    color: Colors.white,
-                    decoration: level != null
-                        ? TextDecoration.underline
-                        : TextDecoration.none,
-                    decorationColor:
-                        level != null ? JlptColors.of(level) : null,
-                    decorationThickness: 3,
-                  ),
-                ),
+                _buildLeveledSurfaceText(surface, level),
               ],
             ),
           ),
@@ -188,26 +169,42 @@ class GrammarHighlight extends StatelessWidget {
         items.add(
           Padding(
             padding: const EdgeInsets.only(right: 1, bottom: 4),
-            child: Text(
-              segment,
-              style: cjkTextStyle(
-                segment,
-                const TextStyle(),
-                fontSize: 22,
-                color: Colors.white,
-                decoration: level != null
-                    ? TextDecoration.underline
-                    : TextDecoration.none,
-                decorationColor: level != null ? JlptColors.of(level) : null,
-                decorationThickness: 3,
-              ),
-            ),
+            child: _buildLeveledSurfaceText(segment, level),
           ),
         );
       }
 
       i = j;
     }
+  }
+
+  Widget _buildLeveledSurfaceText(String segment, String? level) {
+    final textWidget = Text(
+      segment,
+      style: cjkTextStyle(
+        segment,
+        const TextStyle(),
+        fontSize: 22,
+        color: Colors.white,
+      ),
+    );
+
+    if (level == null) {
+      return textWidget;
+    }
+
+    return Container(
+      padding: const EdgeInsets.only(bottom: 1.5),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: JlptColors.of(level),
+            width: 2.6,
+          ),
+        ),
+      ),
+      child: textWidget,
+    );
   }
 
   String? _firstLevel(List<String?> charLevels, int start, int end) {

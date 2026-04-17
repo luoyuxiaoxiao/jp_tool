@@ -485,3 +485,13 @@ def get_stats() -> dict:
         lvl = e.get("level", "unknown")
         by_level[lvl] = by_level.get(lvl, 0) + 1
     return {"total": len(_grammar_db), "manual": manual, "auto_learned": auto, "by_level": by_level}
+
+
+def reset_runtime_cache():
+    """Clear in-memory grammar cache so next access reloads from storage."""
+    global _grammar_db, _known_patterns, _known_pattern_keys, _loaded
+    with _lock:
+        _grammar_db = []
+        _known_patterns = set()
+        _known_pattern_keys = set()
+        _loaded = False

@@ -31,6 +31,7 @@ try:
         delete_history_by_text,
         clear_history_all,
     )
+    from backend.storage.grammar_store import clear_learned_grammar
 except ModuleNotFoundError:
     from storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
     from storage.analysis_store import (
@@ -42,6 +43,7 @@ except ModuleNotFoundError:
         delete_history_by_text,
         clear_history_all,
     )
+    from storage.grammar_store import clear_learned_grammar
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("jp_tool")
@@ -1042,6 +1044,33 @@ async def grammar_auto_learn_configure(body: dict):
     return {
         "status": "ok",
         "enabled": enabled,
+    }
+
+
+@app.post("/api/grammar/learned/clear")
+async def grammar_learned_clear():
+    """Clear learned grammar table and refresh in-memory grammar cache."""
+    deleted = await asyncio.to_thread(clear_learned_grammar)
+
+    stats = None
+    try:
+        from analyzer.grammar_db import reset_runtime_cache, get_stats
+    except ModuleNotFoundError:
+        try:
+            from grammar_db import reset_runtime_cache, get_stats
+        except Exception:
+            reset_runtime_cache = None
+            get_stats = None
+
+    if callable(reset_runtime_cache):
+        reset_runtime_cache()
+    if callable(get_stats):
+        stats = await asyncio.to_thread(get_stats)
+
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "stats": stats,
     }
 
 

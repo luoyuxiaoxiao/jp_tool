@@ -166,3 +166,17 @@ def load_learned_grammar(limit: int | None = None) -> list[dict]:
         )
 
     return items
+
+
+def clear_learned_grammar() -> int:
+    """Delete all learned grammar records and return affected row count."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            cur = conn.execute("DELETE FROM learned_grammar")
+            conn.commit()
+            deleted = int(cur.rowcount or 0)
+        finally:
+            conn.close()
+
+    return deleted

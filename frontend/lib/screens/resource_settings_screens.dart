@@ -155,6 +155,24 @@ class _ExternalResourceConfigScreenState
     );
   }
 
+  Future<bool> _saveOnlyGinzaModelPath(String modelPath) async {
+    final ws = context.read<WebSocketService>();
+    final current = ws.resourceConfig;
+    return ws.saveResourceConfig(
+      ExternalResourceConfig(
+        dictionaryDbPath: current.dictionaryDbPath,
+        ginzaModelPath: modelPath.trim(),
+        ginzaSplitMode: current.ginzaSplitMode,
+        dependencyFocusStyle: current.dependencyFocusStyle,
+        onnxModelPath: current.onnxModelPath,
+        lunaWsEnabled: current.lunaWsEnabled,
+        lunaWsOriginUrl: current.lunaWsOriginUrl,
+        queueMaxPending: current.queueMaxPending,
+        queueDropPrefetchWhenBusy: current.queueDropPrefetchWhenBusy,
+      ),
+    );
+  }
+
   Future<void> _installGinza() async {
     if (_installingGinza) return;
 
@@ -173,7 +191,7 @@ class _ExternalResourceConfigScreenState
             'GiNZA 包已安装${packageStatus.version.isNotEmpty ? '：v${packageStatus.version}' : ''}，无需重复下载';
         _ginzaPathController.text = packageStatus.packageName;
       });
-      await _save();
+      await _saveOnlyGinzaModelPath(packageStatus.packageName);
       await _load();
       messenger.showSnackBar(
         SnackBar(
