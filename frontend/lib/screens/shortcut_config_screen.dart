@@ -18,6 +18,7 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
 
   late final TextEditingController _toggleClipboardCtrl;
   late final TextEditingController _toggleGrammarAutoLearnCtrl;
+  late final TextEditingController _toggleAutoFollowLunaCtrl;
   late final TextEditingController _submitAnalyzeCtrl;
   late final TextEditingController _focusInputCtrl;
 
@@ -31,6 +32,7 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
     super.initState();
     _toggleClipboardCtrl = TextEditingController();
     _toggleGrammarAutoLearnCtrl = TextEditingController();
+    _toggleAutoFollowLunaCtrl = TextEditingController();
     _submitAnalyzeCtrl = TextEditingController();
     _focusInputCtrl = TextEditingController();
     _load();
@@ -40,6 +42,7 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
   void dispose() {
     _toggleClipboardCtrl.dispose();
     _toggleGrammarAutoLearnCtrl.dispose();
+    _toggleAutoFollowLunaCtrl.dispose();
     _submitAnalyzeCtrl.dispose();
     _focusInputCtrl.dispose();
     super.dispose();
@@ -54,6 +57,7 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
     setState(() {
       _toggleClipboardCtrl.text = current.toggleClipboard;
       _toggleGrammarAutoLearnCtrl.text = current.toggleGrammarAutoLearn;
+      _toggleAutoFollowLunaCtrl.text = current.toggleAutoFollowLuna;
       _submitAnalyzeCtrl.text = current.submitAnalyze;
       _focusInputCtrl.text = current.focusInput;
       _loading = false;
@@ -74,6 +78,8 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
       toggleClipboard: normalizeShortcutText(_toggleClipboardCtrl.text),
       toggleGrammarAutoLearn:
           normalizeShortcutText(_toggleGrammarAutoLearnCtrl.text),
+      toggleAutoFollowLuna:
+          normalizeShortcutText(_toggleAutoFollowLunaCtrl.text),
       submitAnalyze: normalizeShortcutText(_submitAnalyzeCtrl.text),
       focusInput: normalizeShortcutText(_focusInputCtrl.text),
     );
@@ -100,6 +106,7 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
     setState(() {
       _toggleClipboardCtrl.text = _defaults.toggleClipboard;
       _toggleGrammarAutoLearnCtrl.text = _defaults.toggleGrammarAutoLearn;
+      _toggleAutoFollowLunaCtrl.text = _defaults.toggleAutoFollowLuna;
       _submitAnalyzeCtrl.text = _defaults.submitAnalyze;
       _focusInputCtrl.text = _defaults.focusInput;
     });
@@ -161,6 +168,13 @@ class _ShortcutConfigScreenState extends State<ShortcutConfigScreen> {
                     hint: 'ctrl+shift+g',
                     controller: _toggleGrammarAutoLearnCtrl,
                     description: '快速开关 LLM 语法自动学习并持久化。',
+                  ),
+                  const SizedBox(height: 14),
+                  _buildShortcutField(
+                    title: '切换自动跟随Luna',
+                    hint: 'ctrl+shift+f',
+                    controller: _toggleAutoFollowLunaCtrl,
+                    description: '同时开关跟随模式与 Luna 预取。',
                   ),
                   const SizedBox(height: 14),
                   _buildShortcutField(

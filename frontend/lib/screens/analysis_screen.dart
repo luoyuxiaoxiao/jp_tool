@@ -27,6 +27,10 @@ class _ToggleGrammarAutoLearnIntent extends Intent {
   const _ToggleGrammarAutoLearnIntent();
 }
 
+class _ToggleAutoFollowLunaIntent extends Intent {
+  const _ToggleAutoFollowLunaIntent();
+}
+
 class _SubmitAnalyzeIntent extends Intent {
   const _SubmitAnalyzeIntent();
 }
@@ -48,6 +52,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   final _longTextScrollController = ScrollController();
   final _inputFocusNode = FocusNode();
   String? _lastRenderedText;
+  bool _historyPanelOpen = false;
+  int? _hoveredHistoryIndex;
 
   @override
   void dispose() {
@@ -61,7 +67,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   void _submit(WebSocketService ws) {
     final text = _controller.text.trim();
     if (text.isNotEmpty) {
-      ws.sendText(text);
+      ws.sendText(text, force: false);
       _controller.clear();
     }
   }
@@ -87,6 +93,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       SnackBar(
         content: Text(
           ok ? (target ? '快捷键：已开启语法自动学习' : '快捷键：已关闭语法自动学习') : '快捷键执行失败，请检查后端连接',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleAutoFollowLunaByShortcut(WebSocketService ws) async {
+    final target = !ws.autoFollowLunaEnabled;
+    final ok = await ws.setAutoFollowLunaEnabled(target);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? (target ? '快捷键：已开启自动跟随Luna' : '快捷键：已关闭自动跟随Luna')
+              : '快捷键执行失败，请检查后端连接',
         ),
       ),
     );
@@ -156,6 +177,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       map[submit] = const _SubmitAnalyzeIntent();
     }
 
+    final autoFollowLuna = parseShortcutActivator(cfg.toggleAutoFollowLuna);
+    if (autoFollowLuna != null) {
+      map[autoFollowLuna] = const _ToggleAutoFollowLunaIntent();
+    }
+
     final focusInput = parseShortcutActivator(cfg.focusInput);
     if (focusInput != null) {
       map[focusInput] = const _FocusInputIntent();
@@ -186,6 +212,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   return null;
                 },
               ),
+              _ToggleAutoFollowLunaIntent:
+                  CallbackAction<_ToggleAutoFollowLunaIntent>(
+                onInvoke: (_) {
+                  unawaited(_toggleAutoFollowLunaByShortcut(ws));
+                  return null;
+                },
+              ),
               _SubmitAnalyzeIntent: CallbackAction<_SubmitAnalyzeIntent>(
                 onInvoke: (_) {
                   _submit(ws);
@@ -203,16 +236,40 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               autofocus: true,
               child: Scaffold(
                 appBar: AppBar(
-                  title: const Text('日语语法解析器'),
+                  centerTitle: true,
+                  leading: IconButton(
+                    icon:
+                        Icon(_historyPanelOpen ? Icons.menu_open : Icons.menu),
+                    tooltip: _historyPanelOpen ? '隐藏历史侧栏' : '显示历史侧栏',
+                    onPressed: () {
+                      setState(() {
+                        _historyPanelOpen = !_historyPanelOpen;
+                        if (!_historyPanelOpen) {
+                          _hoveredHistoryIndex = null;
+                        }
+                      });
+                    },
+                  ),
+                  title: const Text('日语语法解释器'),
                   actions: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    Container(
+                      margin: const EdgeInsets.symmetric(vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.white24),
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0x33FFFFFF), Color(0x11FFFFFF)],
+                        ),
+                      ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
                             Icons.circle,
-                            size: 10,
+                            size: 9,
                             color: ws.connected
                                 ? Colors.greenAccent
                                 : Colors.redAccent,
@@ -220,12 +277,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                           const SizedBox(width: 6),
                           Text(
                             ws.connected ? '已连接' : '未连接',
-                            style: const TextStyle(fontSize: 13),
+                            style: const TextStyle(fontSize: 12),
                           ),
                         ],
                       ),
                     ),
-                    IconButton(
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
                       icon: const Icon(Icons.keyboard),
                       tooltip: '快捷键管理',
                       onPressed: () => Navigator.push(
@@ -234,7 +292,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             builder: (_) => const ShortcutConfigScreen()),
                       ),
                     ),
-                    IconButton(
+                    const SizedBox(width: 4),
+                    IconButton.filledTonal(
                       icon: const Icon(Icons.tune),
                       tooltip: 'LLM/API配置',
                       onPressed: () => Navigator.push(
@@ -243,7 +302,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             builder: (_) => const LlmConfigScreen()),
                       ),
                     ),
-                    IconButton(
+                    const SizedBox(width: 4),
+                    IconButton.filledTonal(
                       icon: const Icon(Icons.settings),
                       tooltip: '设置',
                       onPressed: () => Navigator.push(
@@ -252,30 +312,54 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             builder: (_) => const SettingsScreen()),
                       ),
                     ),
+                    const SizedBox(width: 8),
                   ],
                 ),
-                body: Row(
-                  children: [
-                    SizedBox(
-                      width: 200,
-                      child: _buildHistory(),
-                    ),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _buildInputBar(),
-                          const Divider(height: 1),
-                          Expanded(
-                            child: ColoredBox(
-                              color: const Color(0x6611151D),
-                              child: _buildResults(),
+                body: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final maxWidth = constraints.maxWidth;
+                    final maxHistoryWidth =
+                        ((maxWidth - 120).clamp(0.0, 260.0)).toDouble();
+                    final historyWidth =
+                        _historyPanelOpen ? maxHistoryWidth : 0.0;
+                    final showHistoryContent = historyWidth >= 180;
+                    final dividerWidth = showHistoryContent ? 1.0 : 0.0;
+
+                    return Row(
+                      children: [
+                        SizedBox(
+                          width: historyWidth,
+                          child: ClipRect(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              widthFactor: showHistoryContent ? 1 : 0,
+                              child: showHistoryContent
+                                  ? _buildHistory()
+                                  : const SizedBox.shrink(),
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ],
+                        ),
+                        SizedBox(
+                          width: dividerWidth,
+                          child: const ColoredBox(color: Colors.white12),
+                        ),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              _buildInputBar(),
+                              const Divider(height: 1),
+                              Expanded(
+                                child: ColoredBox(
+                                  color: const Color(0x6611151D),
+                                  child: _buildResults(),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -287,233 +371,133 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   Widget _buildInputBar() {
     return Consumer<WebSocketService>(
-      builder: (_, ws, __) => Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _inputFocusNode,
-                    decoration: const InputDecoration(
-                      hintText: '输入日文，或从 LunaTranslator 自动获取...',
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      isDense: true,
-                    ),
-                    onSubmitted: (_) => _submit(ws),
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: () => _submit(ws),
-                  icon: const Icon(Icons.send, size: 18),
-                  label: const Text('解析'),
-                ),
-              ],
+      builder: (_, ws, __) {
+        final toggleClipboardShortcut =
+            shortcutDisplayText(ws.shortcutConfig.toggleClipboard);
+        final toggleAutoFollowShortcut =
+            shortcutDisplayText(ws.shortcutConfig.toggleAutoFollowLuna);
+        final submitShortcut =
+            shortcutDisplayText(ws.shortcutConfig.submitAnalyze);
+
+        final inputField = TextField(
+          controller: _controller,
+          focusNode: _inputFocusNode,
+          decoration: const InputDecoration(
+            hintText: '输入日文，或从 LunaTranslator 自动获取...',
+            border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
             ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Text('剪贴板监听', style: TextStyle(fontSize: 13)),
-                const SizedBox(width: 8),
-                Switch(
-                  value: ws.clipboardEnabled,
-                  onChanged: (value) async {
-                    final ok = await ws.setClipboardEnabled(value);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          ok
-                              ? (value ? '已开启剪贴板监听' : '已关闭剪贴板监听')
-                              : '切换失败，请检查后端连接',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  ws.clipboardEnabled ? '已开启' : '已关闭',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color:
-                        ws.clipboardEnabled ? Colors.greenAccent : Colors.grey,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                const Text('跟随模式', style: TextStyle(fontSize: 13)),
-                const SizedBox(width: 8),
-                Switch(
-                  value: ws.followModeEnabled,
-                  onChanged: (value) async {
-                    final ok = await ws.setFollowModeEnabled(value);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          ok ? (value ? '已开启跟随模式' : '已关闭跟随模式') : '切换失败，请检查后端连接',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  ws.followModeEnabled ? '已开启' : '已关闭',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color:
-                        ws.followModeEnabled ? Colors.greenAccent : Colors.grey,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                const Text('Luna预取', style: TextStyle(fontSize: 13)),
-                const SizedBox(width: 8),
-                Switch(
-                  value: ws.resourceConfig.lunaWsEnabled,
-                  onChanged: (value) async {
-                    final ok = await ws.setLunaWsEnabled(value);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          ok
-                              ? (value ? '已开启 Luna 预取' : '已关闭 Luna 预取')
-                              : '切换失败，请检查后端连接',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  ws.resourceConfig.lunaWsEnabled ? '已开启' : '已关闭',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: ws.resourceConfig.lunaWsEnabled
-                        ? Colors.greenAccent
-                        : Colors.grey,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                const Text('分词', style: TextStyle(fontSize: 13)),
-                const SizedBox(width: 6),
-                PopupMenuButton<String>(
-                  tooltip: 'GiNZA 分词等级',
-                  onSelected: (mode) async {
-                    final ok = await ws.setGinzaSplitMode(mode);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          ok ? 'GiNZA 分词等级已切换为 $mode' : '切换失败，请检查后端连接',
-                        ),
-                      ),
-                    );
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: 'A',
-                      child: Text('A（细粒度）'),
-                    ),
-                    PopupMenuItem(
-                      value: 'B',
-                      child: Text('B（平衡）'),
-                    ),
-                    PopupMenuItem(
-                      value: 'C',
-                      child: Text('C（粗粒度，阅读推荐）'),
-                    ),
-                  ],
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white24),
-                      color: Colors.white10,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+            isDense: true,
+          ),
+          onSubmitted: (_) => _submit(ws),
+          style: const TextStyle(fontSize: 16),
+        );
+
+        final submitButton = Tooltip(
+          message: submitShortcut.isEmpty ? '提交解析' : '快捷键：$submitShortcut',
+          child: FilledButton.icon(
+            onPressed: () => _submit(ws),
+            icon: const Icon(Icons.send, size: 18),
+            label: const Text('解析'),
+          ),
+        );
+
+        return Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 460;
+                  if (compact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          'GiNZA ${ws.resourceConfig.ginzaSplitMode}',
-                          style: const TextStyle(fontSize: 12),
+                        inputField,
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: submitButton,
                         ),
-                        const SizedBox(width: 2),
-                        const Icon(Icons.arrow_drop_down, size: 16),
                       ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                PopupMenuButton<String>(
-                  tooltip: '依存聚焦风格',
-                  onSelected: (style) async {
-                    final ok = await ws.setDependencyFocusStyle(style);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          ok
-                              ? '依存聚焦风格已切换为 ${style == 'vivid' ? 'vivid（炫彩）' : 'classic（经典）'}'
-                              : '切换失败，请检查后端连接',
-                        ),
-                      ),
                     );
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: 'classic',
-                      child: Text('classic（经典）'),
-                    ),
-                    PopupMenuItem(
-                      value: 'vivid',
-                      child: Text('vivid（炫彩）'),
-                    ),
-                  ],
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white24),
-                      color: Colors.white10,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          ws.resourceConfig.dependencyFocusStyle == 'vivid'
-                              ? '依存 vivid'
-                              : '依存 classic',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        const SizedBox(width: 2),
-                        const Icon(Icons.arrow_drop_down, size: 16),
-                      ],
-                    ),
+                  }
+
+                  return Row(
+                    children: [
+                      Expanded(child: inputField),
+                      const SizedBox(width: 8),
+                      submitButton,
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      Tooltip(
+                        message: toggleClipboardShortcut.isEmpty
+                            ? '切换剪贴板监听'
+                            : '快捷键：$toggleClipboardShortcut',
+                        child:
+                            const Text('剪贴板监听', style: TextStyle(fontSize: 13)),
+                      ),
+                      const SizedBox(width: 8),
+                      Switch(
+                        value: ws.clipboardEnabled,
+                        onChanged: (value) async {
+                          final ok = await ws.setClipboardEnabled(value);
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                ok
+                                    ? (value ? '剪贴板监听已开启' : '剪贴板监听已关闭')
+                                    : '切换失败，请检查后端连接',
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(width: 18),
+                      Tooltip(
+                        message: toggleAutoFollowShortcut.isEmpty
+                            ? '切换自动跟随Luna'
+                            : '快捷键：$toggleAutoFollowShortcut',
+                        child: const Text('自动跟随Luna',
+                            style: TextStyle(fontSize: 13)),
+                      ),
+                      const SizedBox(width: 8),
+                      Switch(
+                        value: ws.autoFollowLunaEnabled,
+                        onChanged: (value) async {
+                          final ok = await ws.setAutoFollowLunaEnabled(value);
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                ok
+                                    ? (value ? '自动跟随Luna已开启' : '自动跟随Luna已关闭')
+                                    : '切换失败，请检查后端连接',
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                 ),
-                const Spacer(),
-                if (!ws.llmEnabled)
-                  const Text(
-                    '轻量模式：不进行深度分析',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -725,24 +709,70 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       itemCount: history.length,
                       itemBuilder: (_, i) {
                         final item = history[i];
-                        return ListTile(
-                          dense: true,
-                          title: Text(
-                            item.text,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                          trailing: IconButton(
-                            tooltip: '删除这条历史记录',
-                            icon: const Icon(
-                              Icons.delete_outline,
-                              size: 18,
+                        final hovered = _hoveredHistoryIndex == i;
+                        return MouseRegion(
+                          onEnter: (_) {
+                            if (_hoveredHistoryIndex != i) {
+                              setState(() => _hoveredHistoryIndex = i);
+                            }
+                          },
+                          onExit: (_) {
+                            if (_hoveredHistoryIndex == i) {
+                              setState(() => _hoveredHistoryIndex = null);
+                            }
+                          },
+                          child: SizedBox(
+                            height: 56,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () =>
+                                    ws.sendText(item.text, force: false),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          item.text,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 13),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      AnimatedOpacity(
+                                        duration:
+                                            const Duration(milliseconds: 120),
+                                        opacity: hovered ? 1 : 0,
+                                        child: IgnorePointer(
+                                          ignoring: !hovered,
+                                          child: IconButton(
+                                            constraints:
+                                                const BoxConstraints.tightFor(
+                                              width: 32,
+                                              height: 32,
+                                            ),
+                                            padding: EdgeInsets.zero,
+                                            tooltip: '删除这条历史记录',
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                              size: 18,
+                                            ),
+                                            onPressed: () => unawaited(
+                                              _deleteHistoryItem(ws, item),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ),
-                            onPressed: () =>
-                                unawaited(_deleteHistoryItem(ws, item)),
                           ),
-                          onTap: () => ws.sendText(item.text),
                         );
                       },
                     ),

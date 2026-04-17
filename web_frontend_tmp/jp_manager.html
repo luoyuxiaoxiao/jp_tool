@@ -56,7 +56,7 @@ function categoryZh(name) {
 }
 
 function connect() {
-  ws = new WebSocket('ws://localhost:8765/ws');
+  ws = new WebSocket('ws://localhost:8865/ws');
   ws.onopen = () => {
     document.getElementById('wsDot').className='dot on';
     document.getElementById('wsText').textContent='已连接';

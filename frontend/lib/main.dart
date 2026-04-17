@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/websocket_service.dart';
@@ -80,6 +81,16 @@ class _JpGrammarAppState extends State<JpGrammarApp> {
       scaffoldMessengerKey: _messengerKey,
       title: 'JP Grammar Analyzer',
       debugShowCheckedModeBanner: false,
+      builder: (context, child) {
+        final content = child ?? const SizedBox.shrink();
+        if (defaultTargetPlatform != TargetPlatform.windows) {
+          return content;
+        }
+
+        // Flutter Windows AXTree can fail during frequent hover updates.
+        // Disable platform semantics on Windows as a stability workaround.
+        return ExcludeSemantics(child: content);
+      },
       theme: baseTheme.copyWith(
         scaffoldBackgroundColor: const Color(0xCC11151D),
         canvasColor: const Color(0xCC11151D),

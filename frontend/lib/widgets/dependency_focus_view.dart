@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:ui' show Tangent;
 
 import 'package:flutter/material.dart';
+
 import '../models/analysis_result.dart';
 
 class DependencyFocusView extends StatefulWidget {
@@ -21,8 +22,7 @@ class DependencyFocusView extends StatefulWidget {
   State<DependencyFocusView> createState() => _DependencyFocusViewState();
 }
 
-class _DependencyFocusViewState extends State<DependencyFocusView>
-    with SingleTickerProviderStateMixin {
+class _DependencyFocusViewState extends State<DependencyFocusView> {
   int? _hoveredIndex;
   final GlobalKey _chipsAreaKey = GlobalKey();
   final Map<int, GlobalKey> _chipKeys = <int, GlobalKey>{};
@@ -30,28 +30,6 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
   bool _rectSyncScheduled = false;
 
   bool get _isVivid => widget.style.trim().toLowerCase() == 'vivid';
-
-  AnimationController? _pulseController;
-
-  AnimationController _ensurePulseController() {
-    final existing = _pulseController;
-    if (existing != null) {
-      return existing;
-    }
-
-    final created = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
-    _pulseController = created;
-    return created;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _ensurePulseController();
-  }
 
   @override
   void didUpdateWidget(covariant DependencyFocusView oldWidget) {
@@ -61,15 +39,10 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
       if (_hoveredIndex != null && _hoveredIndex! >= widget.tokens.length) {
         _hoveredIndex = null;
       }
-      _scheduleRectSync();
+      if (_isVivid) {
+        _scheduleRectSync();
+      }
     }
-  }
-
-  @override
-  void dispose() {
-    _pulseController?.dispose();
-    _pulseController = null;
-    super.dispose();
   }
 
   @override
@@ -78,9 +51,13 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
       return const SizedBox.shrink();
     }
 
-    _scheduleRectSync();
+    if (_isVivid) {
+      _scheduleRectSync();
+    }
 
-    return MouseRegion(
+    const focusTitle = 'GiNZA 依存聚焦（悬停查看修饰关系）';
+
+    final content = MouseRegion(
       onExit: (_) {
         if (_hoveredIndex != null) {
           setState(() => _hoveredIndex = null);
@@ -115,14 +92,17 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               children: [
-                Icon(Icons.account_tree_outlined,
+                const Icon(Icons.account_tree_outlined,
                     size: 16, color: Colors.cyanAccent),
-                SizedBox(width: 6),
+                const SizedBox(width: 6),
                 Text(
-                  'GiNZA 依存聚焦（悬停查看修饰关系）',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  focusTitle,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -131,19 +111,23 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
               key: _chipsAreaKey,
               clipBehavior: Clip.none,
               children: [
-                if (_isVivid && _hoveredIndex != null && _chipRects.isNotEmpty)
-                  Positioned.fill(
-                    child: IgnorePointer(
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: RepaintBoundary(
                       child: CustomPaint(
-                        painter: _DependencyLinkPainter(
-                          tokens: widget.tokens,
-                          hoveredIndex: _hoveredIndex!,
-                          chipRects: _chipRects,
-                          animation: _ensurePulseController(),
-                        ),
+                        painter: (_isVivid &&
+                                _hoveredIndex != null &&
+                                _chipRects.isNotEmpty)
+                            ? _DependencyLinkPainter(
+                                tokens: widget.tokens,
+                                hoveredIndex: _hoveredIndex!,
+                                chipRects: _chipRects,
+                              )
+                            : null,
                       ),
                     ),
                   ),
+                ),
                 Wrap(
                   spacing: 6,
                   runSpacing: 8,
@@ -160,12 +144,15 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
         ),
       ),
     );
+
+    return content;
   }
 
   Widget _buildTokenChip(int index) {
     final token = widget.tokens[index];
     final related = _isRelated(index);
     final selected = _hoveredIndex == index;
+    final meaning = token.meaningZh.trim();
     final chipKey = _chipKeys.putIfAbsent(index, GlobalKey.new);
 
     final borderColor = selected
@@ -176,72 +163,80 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
         ? Colors.grey
         : (selected ? Colors.cyanAccent : Colors.white);
 
-    return MouseRegion(
-      onEnter: (_) {
-        if (_hoveredIndex != index) {
-          setState(() => _hoveredIndex = index);
-          _scheduleRectSync();
-        }
-      },
-      child: KeyedSubtree(
-        key: chipKey,
-        child: Padding(
-          // Slightly expands hover hit area to reduce boundary jitter.
-          padding: const EdgeInsets.all(1),
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 120),
-            opacity: related ? 1.0 : 0.2,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color:
-                    selected ? Colors.cyanAccent.withAlpha(28) : Colors.black26,
-                border: Border.all(color: borderColor),
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [
-                  if (_isVivid && selected)
-                    const BoxShadow(
-                      color: Color(0x4420D8FF),
-                      blurRadius: 10,
-                      spreadRadius: 0.5,
-                    ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    token.surface,
+    final chip = KeyedSubtree(
+      key: chipKey,
+      child: Padding(
+        // Slightly expands hover hit area to reduce boundary jitter.
+        padding: const EdgeInsets.all(1),
+        child: Opacity(
+          opacity: related ? 1.0 : 0.24,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color:
+                  selected ? Colors.cyanAccent.withAlpha(28) : Colors.black26,
+              border: Border.all(color: borderColor),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                if (_isVivid && selected)
+                  const BoxShadow(
+                    color: Color(0x4420D8FF),
+                    blurRadius: 10,
+                    spreadRadius: 0.5,
+                  ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  token.surface,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 16,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+                SizedBox(
+                  height: 13,
+                  child: Text(
+                    meaning.isEmpty ? '\u200B' : meaning,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: textColor,
-                      fontSize: 16,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected && meaning.isNotEmpty
+                          ? const Color(0xFFFFD54F)
+                          : Colors.transparent,
+                      fontSize: 11,
                     ),
                   ),
-                  if (selected && token.meaningZh.trim().isNotEmpty)
-                    Text(
-                      token.meaningZh.trim(),
-                      style: const TextStyle(
-                        color: Color(0xFFFFD54F),
-                        fontSize: 11,
-                      ),
-                    ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
       ),
+    );
+
+    return MouseRegion(
+      onEnter: (_) {
+        if (_hoveredIndex != index) {
+          setState(() => _hoveredIndex = index);
+          if (_isVivid) {
+            _scheduleRectSync();
+          }
+        }
+      },
+      child: chip,
     );
   }
 
   Widget _buildDependencyDetails(int hovered) {
     final token = widget.tokens[hovered];
     final headIdx = _safeIndex(token.headIndex);
-
     final children = <int>[];
+
     for (var i = 0; i < widget.tokens.length; i++) {
       if (i == hovered) continue;
       if (_safeIndex(widget.tokens[i].headIndex) == hovered) {
@@ -249,7 +244,7 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
       }
     }
 
-    final lines = [
+    final lines = <Widget>[
       if (headIdx != null && headIdx != hovered)
         _arrowLine(
           from: token.surface,
@@ -314,7 +309,10 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
           Text(
             '$from  ->  $to',
             style: TextStyle(
-                color: color, fontSize: 12, fontWeight: FontWeight.w600),
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(width: 8),
           Text(
@@ -327,18 +325,22 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
   }
 
   void _scheduleRectSync() {
-    if (_rectSyncScheduled) {
+    if (!_isVivid || _rectSyncScheduled) {
       return;
     }
     _rectSyncScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _rectSyncScheduled = false;
+        return;
+      }
       _rectSyncScheduled = false;
       _syncChipRects();
     });
   }
 
   void _syncChipRects() {
-    if (!mounted) {
+    if (!mounted || !_isVivid) {
       return;
     }
 
@@ -359,10 +361,12 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
       if (chipContext == null) {
         continue;
       }
+
       final box = chipContext.findRenderObject();
       if (box is! RenderBox || !box.attached) {
         continue;
       }
+
       final topLeft = box.localToGlobal(Offset.zero, ancestor: areaBox);
       next[i] = topLeft & box.size;
     }
@@ -375,6 +379,7 @@ class _DependencyFocusViewState extends State<DependencyFocusView>
   bool _sameRectMap(Map<int, Rect> a, Map<int, Rect> b) {
     if (identical(a, b)) return true;
     if (a.length != b.length) return false;
+
     for (final entry in a.entries) {
       final other = b[entry.key];
       if (other == null) return false;
@@ -415,14 +420,12 @@ class _DependencyLinkPainter extends CustomPainter {
   final List<Token> tokens;
   final int hoveredIndex;
   final Map<int, Rect> chipRects;
-  final Animation<double> animation;
 
   _DependencyLinkPainter({
     required this.tokens,
     required this.hoveredIndex,
     required this.chipRects,
-    required this.animation,
-  }) : super(repaint: animation);
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -437,20 +440,20 @@ class _DependencyLinkPainter extends CustomPainter {
 
     if (head >= 0 && head < tokens.length && head != hoveredIndex) {
       edges.add(
-          _DepEdge(from: hoveredIndex, to: head, color: Colors.cyanAccent));
+        _DepEdge(from: hoveredIndex, to: head, color: Colors.cyanAccent),
+      );
     }
 
     for (var i = 0; i < tokens.length; i++) {
       if (i == hoveredIndex) continue;
       if (tokens[i].headIndex == hoveredIndex) {
         edges.add(
-            _DepEdge(from: i, to: hoveredIndex, color: Colors.orangeAccent));
+          _DepEdge(from: i, to: hoveredIndex, color: Colors.orangeAccent),
+        );
       }
     }
 
-    final pulse = animation.value;
-    for (var i = 0; i < edges.length; i++) {
-      final edge = edges[i];
+    for (final edge in edges) {
       final fromRect = chipRects[edge.from];
       final toRect = chipRects[edge.to];
       if (fromRect == null || toRect == null) {
@@ -479,7 +482,7 @@ class _DependencyLinkPainter extends CustomPainter {
       final glow = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..strokeWidth = 5.6 + pulse * 1.4
+        ..strokeWidth = 5.4
         ..color = edge.color.withAlpha(58)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
       canvas.drawPath(path, glow);
@@ -487,7 +490,7 @@ class _DependencyLinkPainter extends CustomPainter {
       final line = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..strokeWidth = 2.0 + pulse * 0.4
+        ..strokeWidth = 2.2
         ..shader = LinearGradient(
           colors: [
             edge.color.withAlpha(70),
@@ -502,22 +505,11 @@ class _DependencyLinkPainter extends CustomPainter {
       if (metricList.isEmpty) {
         continue;
       }
-      final metric = metricList.first;
 
+      final metric = metricList.first;
       final endTangent = metric.getTangentForOffset(metric.length - 1);
       if (endTangent != null) {
         _drawArrowHead(canvas, endTangent, edge.color);
-      }
-
-      final runnerT = (pulse + i * 0.17) % 1.0;
-      final runnerOffset = metric.length * runnerT;
-      final runnerTangent = metric.getTangentForOffset(runnerOffset);
-      if (runnerTangent != null) {
-        canvas.drawCircle(
-          runnerTangent.position,
-          2.3,
-          Paint()..color = Colors.white.withAlpha(210),
-        );
       }
     }
   }

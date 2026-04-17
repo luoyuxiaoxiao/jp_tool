@@ -237,3 +237,17 @@ def delete_history_by_text(text: str) -> int:
             conn.close()
 
     return deleted
+
+
+def clear_history_all() -> int:
+    """Delete all analysis history records and return affected row count."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            cur = conn.execute("DELETE FROM analysis_history")
+            conn.commit()
+            deleted = int(cur.rowcount or 0)
+        finally:
+            conn.close()
+
+    return deleted

@@ -14,7 +14,7 @@ import urllib.request
 
 
 # Backend endpoint (keep default fixed port unless explicitly changed).
-JP_TOOL_URL = "http://127.0.0.1:8765/api/text"
+JP_TOOL_URL = "http://127.0.0.1:8865/api/text"
 
 # Network timeout (seconds), keep short to avoid impacting game loop.
 TIMEOUT = 2

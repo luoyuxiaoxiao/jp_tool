@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import hashlib
 import json
 import logging
 import mimetypes
 import os
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 
@@ -27,6 +29,7 @@ try:
         get_recent_results,
         prune_to_limit,
         delete_history_by_text,
+        clear_history_all,
     )
 except ModuleNotFoundError:
     from storage.settings_store import load_env_from_db, get_runtime_settings, save_runtime_settings
@@ -37,6 +40,7 @@ except ModuleNotFoundError:
         get_recent_results,
         prune_to_limit,
         delete_history_by_text,
+        clear_history_all,
     )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -51,16 +55,16 @@ def _resolve_server_host() -> str:
 
 
 def _resolve_server_port() -> int:
-    raw = str(os.environ.get("JP_TOOL_PORT", "8765")).strip()
+    raw = str(os.environ.get("JP_TOOL_PORT", "8865")).strip()
     try:
         port = int(raw)
     except Exception:
-        logger.warning("Invalid JP_TOOL_PORT=%r, fallback to 8765", raw)
-        return 8765
+        logger.warning("Invalid JP_TOOL_PORT=%r, fallback to 8865", raw)
+        return 8865
 
     if port < 1 or port > 65535:
-        logger.warning("Out-of-range JP_TOOL_PORT=%r, fallback to 8765", raw)
-        return 8765
+        logger.warning("Out-of-range JP_TOOL_PORT=%r, fallback to 8865", raw)
+        return 8865
 
     return port
 
@@ -328,6 +332,13 @@ def _get_shortcut_config() -> dict[str, str]:
                 settings.get("SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN", "ctrl+shift+g"),
             ),
             "ctrl+shift+g",
+        ),
+        "toggle_auto_follow_luna": _normalize_shortcut(
+            os.environ.get(
+                "SHORTCUT_TOGGLE_AUTO_FOLLOW_LUNA",
+                settings.get("SHORTCUT_TOGGLE_AUTO_FOLLOW_LUNA", "ctrl+shift+f"),
+            ),
+            "ctrl+shift+f",
         ),
         "submit_analyze": _normalize_shortcut(
             os.environ.get(
@@ -1126,6 +1137,17 @@ async def resources_configure(body: dict):
         )
 
     save_runtime_settings(persisted)
+    try:
+        from analyzer.ginza_runtime import reset_ginza_runtime
+    except ModuleNotFoundError:
+        try:
+            from ginza_runtime import reset_ginza_runtime
+        except Exception:
+            reset_ginza_runtime = None
+
+    if callable(reset_ginza_runtime):
+        reset_ginza_runtime()
+
     await _stop_luna_stream_task()
     await _ensure_luna_stream_task()
 
@@ -1167,6 +1189,112 @@ async def ginza_status():
     }
 
 
+def _check_ginza_package_installed(package_name: str) -> tuple[bool, str]:
+    name = str(package_name or "").strip()
+    if not name:
+        return False, ""
+
+    try:
+        version = importlib.metadata.version(name)
+        return True, str(version)
+    except Exception:
+        return False, ""
+
+
+@app.get("/api/ginza/package-status/{package_name}")
+async def ginza_package_status(package_name: str):
+    """Return whether a supported GiNZA pip package is already installed."""
+    package_name = str(package_name or "").strip()
+    if package_name not in {"ja_ginza_electra", "ja_ginza"}:
+        return {
+            "status": "error",
+            "package_name": package_name,
+            "installed": False,
+            "version": "",
+            "error": f"unsupported package: {package_name}",
+        }
+
+    installed, version = _check_ginza_package_installed(package_name)
+    return {
+        "status": "ok",
+        "package_name": package_name,
+        "installed": installed,
+        "version": version,
+    }
+
+
+@app.post("/api/ginza/install")
+async def ginza_install(body: dict):
+    """Install a supported GiNZA model package via pip and persist it."""
+    incoming = body if isinstance(body, dict) else {}
+    package_name = str(incoming.get("package_name", "ja_ginza_electra") or "").strip()
+    if package_name not in {"ja_ginza_electra", "ja_ginza"}:
+        return {
+            "status": "error",
+            "error": f"unsupported package: {package_name}",
+            "package_name": package_name,
+        }
+
+    installed, version = _check_ginza_package_installed(package_name)
+    if installed:
+        save_runtime_settings({"RESOURCE_GINZA_MODEL_PATH": package_name})
+        try:
+            from analyzer.ginza_runtime import reset_ginza_runtime
+        except ModuleNotFoundError:
+            try:
+                from ginza_runtime import reset_ginza_runtime
+            except Exception:
+                reset_ginza_runtime = None
+
+        if callable(reset_ginza_runtime):
+            reset_ginza_runtime()
+
+        return {
+            "status": "ok",
+            "package_name": package_name,
+            "already_installed": True,
+            "version": version,
+            "message": f"{package_name} 已安装，无需重复下载",
+        }
+
+    command = [sys.executable, "-m", "pip", "install", package_name]
+
+    def _run_install():
+        return subprocess.run(command, capture_output=True, text=True, check=False)
+
+    result = await asyncio.to_thread(_run_install)
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+
+    if result.returncode != 0:
+        return {
+            "status": "error",
+            "package_name": package_name,
+            "error": stderr or stdout or f"pip exited with code {result.returncode}",
+        }
+
+    save_runtime_settings({"RESOURCE_GINZA_MODEL_PATH": package_name})
+    try:
+        from analyzer.ginza_runtime import reset_ginza_runtime
+    except ModuleNotFoundError:
+        try:
+            from ginza_runtime import reset_ginza_runtime
+        except Exception:
+            reset_ginza_runtime = None
+
+    if callable(reset_ginza_runtime):
+        reset_ginza_runtime()
+
+    return {
+        "status": "ok",
+        "package_name": package_name,
+        "already_installed": False,
+        "message": f"{package_name} 已安装并写入配置",
+        "stdout": stdout[-2000:],
+        "stderr": stderr[-2000:],
+    }
+
+
 @app.get("/api/shortcuts/config")
 async def shortcuts_config_get():
     return {
@@ -1191,6 +1319,10 @@ async def shortcuts_configure(body: dict):
         incoming.get("toggle_grammar_auto_learn", current["toggle_grammar_auto_learn"]),
         current["toggle_grammar_auto_learn"],
     )
+    toggle_auto_follow_luna = _normalize_shortcut(
+        incoming.get("toggle_auto_follow_luna", current["toggle_auto_follow_luna"]),
+        current["toggle_auto_follow_luna"],
+    )
     submit_analyze = _normalize_shortcut(
         incoming.get("submit_analyze", current["submit_analyze"]),
         current["submit_analyze"],
@@ -1204,6 +1336,7 @@ async def shortcuts_configure(body: dict):
         {
             "SHORTCUT_TOGGLE_CLIPBOARD": toggle_clipboard,
             "SHORTCUT_TOGGLE_GRAMMAR_AUTO_LEARN": toggle_grammar_auto_learn,
+            "SHORTCUT_TOGGLE_AUTO_FOLLOW_LUNA": toggle_auto_follow_luna,
             "SHORTCUT_SUBMIT_ANALYZE": submit_analyze,
             "SHORTCUT_FOCUS_INPUT": focus_input,
         }
@@ -1259,6 +1392,16 @@ async def analysis_history_delete(body: dict):
         "status": "ok",
         "deleted": deleted,
         "text": text,
+    }
+
+
+@app.post("/api/analysis/history/clear")
+async def analysis_history_clear():
+    """Delete all analysis history/cache records."""
+    deleted = await asyncio.to_thread(clear_history_all)
+    return {
+        "status": "ok",
+        "deleted": deleted,
     }
 
 
@@ -1327,7 +1470,9 @@ async def on_new_text(text: str, metadata: dict | None = None):
         normalized[:60],
     )
 
-    cached = await asyncio.to_thread(get_cached_result, normalized)
+    cached = None
+    if not force:
+        cached = await asyncio.to_thread(get_cached_result, normalized)
 
     basic: BasicResult | None = None
     if cached and isinstance(cached.get("basic_result"), dict):

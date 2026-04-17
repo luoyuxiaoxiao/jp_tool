@@ -67,6 +67,10 @@ cache/downloads/
 *.pth
 *.pt
 *.ckpt
+*.mp4
+*.mov
+*.mkv
+*.webm
 
 # Local env files
 .env

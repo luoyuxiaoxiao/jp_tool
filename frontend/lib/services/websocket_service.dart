@@ -110,12 +110,14 @@ class LlmModelFetchResult {
 class ShortcutConfig {
   final String toggleClipboard;
   final String toggleGrammarAutoLearn;
+  final String toggleAutoFollowLuna;
   final String submitAnalyze;
   final String focusInput;
 
   const ShortcutConfig({
     this.toggleClipboard = 'ctrl+shift+b',
     this.toggleGrammarAutoLearn = 'ctrl+shift+g',
+    this.toggleAutoFollowLuna = 'ctrl+shift+f',
     this.submitAnalyze = 'ctrl+enter',
     this.focusInput = 'ctrl+l',
   });
@@ -128,6 +130,8 @@ class ShortcutConfig {
           (source['toggle_clipboard'] ?? 'ctrl+shift+b').toString(),
       toggleGrammarAutoLearn:
           (source['toggle_grammar_auto_learn'] ?? 'ctrl+shift+g').toString(),
+      toggleAutoFollowLuna:
+          (source['toggle_auto_follow_luna'] ?? 'ctrl+shift+f').toString(),
       submitAnalyze: (source['submit_analyze'] ?? 'ctrl+enter').toString(),
       focusInput: (source['focus_input'] ?? 'ctrl+l').toString(),
     );
@@ -136,6 +140,7 @@ class ShortcutConfig {
   Map<String, dynamic> toJson() => {
         'toggle_clipboard': toggleClipboard,
         'toggle_grammar_auto_learn': toggleGrammarAutoLearn,
+        'toggle_auto_follow_luna': toggleAutoFollowLuna,
         'submit_analyze': submitAnalyze,
         'focus_input': focusInput,
       };
@@ -154,7 +159,7 @@ class ExternalResourceConfig {
 
   const ExternalResourceConfig({
     this.dictionaryDbPath = '',
-    this.ginzaModelPath = 'ja_ginza_electra',
+    this.ginzaModelPath = '',
     this.ginzaSplitMode = 'C',
     this.dependencyFocusStyle = 'classic',
     this.onnxModelPath = '',
@@ -195,12 +200,80 @@ class ExternalResourceConfig {
       };
 }
 
+class GinzaRuntimeStatus {
+  final bool enabled;
+  final String model;
+  final String splitMode;
+  final String error;
+
+  const GinzaRuntimeStatus({
+    required this.enabled,
+    this.model = '',
+    this.splitMode = 'C',
+    this.error = '',
+  });
+
+  factory GinzaRuntimeStatus.fromJson(Map<String, dynamic> j) =>
+      GinzaRuntimeStatus(
+        enabled: j['enabled'] == true,
+        model: (j['model'] ?? '').toString(),
+        splitMode: _normalizeGinzaSplitMode(j['split_mode']),
+        error: (j['error'] ?? '').toString(),
+      );
+}
+
+class GinzaPackageStatus {
+  final bool installed;
+  final String packageName;
+  final String version;
+  final String error;
+
+  const GinzaPackageStatus({
+    required this.installed,
+    required this.packageName,
+    this.version = '',
+    this.error = '',
+  });
+
+  factory GinzaPackageStatus.fromJson(Map<String, dynamic> j) =>
+      GinzaPackageStatus(
+        installed: j['installed'] == true,
+        packageName: (j['package_name'] ?? '').toString(),
+        version: (j['version'] ?? '').toString(),
+        error: (j['error'] ?? '').toString(),
+      );
+}
+
+class GinzaInstallResult {
+  final bool ok;
+  final String packageName;
+  final bool alreadyInstalled;
+  final String message;
+  final String error;
+
+  const GinzaInstallResult({
+    required this.ok,
+    required this.packageName,
+    this.alreadyInstalled = false,
+    this.message = '',
+    this.error = '',
+  });
+
+  factory GinzaInstallResult.fromJson(Map<String, dynamic> j) =>
+      GinzaInstallResult(
+        ok: j['status'] == 'ok',
+        packageName: (j['package_name'] ?? '').toString(),
+        alreadyInstalled: j['already_installed'] == true,
+        message: (j['message'] ?? '').toString(),
+        error: (j['error'] ?? '').toString(),
+      );
+}
+
 class WebSocketService extends ChangeNotifier {
-  static const int _defaultBackendPort = 8765;
+  static const int _defaultBackendPort = 8865;
   static const List<String> _windowEffectValues = [
     'transparent',
     'mica',
-    'disabled',
   ];
   static const int _maxBackendLogLines = 600;
 
@@ -209,7 +282,6 @@ class WebSocketService extends ChangeNotifier {
   static const int _maxHistoryLimit = 500;
   static const String _historyStorageKey = 'jp_history_items_v1';
   static const String _historyLimitStorageKey = 'jp_history_limit_v1';
-  static const String _backendAutoStartStorageKey = 'jp_backend_autostart_v1';
   static const String _backendLogEnabledStorageKey =
       'jp_backend_log_enabled_v1';
   static const String _windowEffectStorageKey = 'jp_window_effect_v1';
@@ -219,17 +291,15 @@ class WebSocketService extends ChangeNotifier {
   int _connectionToken = 0;
   bool _shouldReconnect = true;
   bool _connected = false;
-  String _serverUrl = 'ws://localhost:8765/ws';
+  String _serverUrl = 'ws://localhost:8865/ws';
   bool _llmEnabled = false;
   bool _clipboardEnabled = true;
   bool _followModeEnabled = false;
   bool _grammarAutoLearnEnabled = true;
   bool _deepAutoAnalyzeEnabled = true;
-  bool _autoStartBackend = true;
   int? _managedBackendPid;
   int? _managedBackendPort;
   String? _managedBackendError;
-  Process? _managedBackendProcess;
   StreamSubscription<String>? _backendStdoutSub;
   StreamSubscription<String>? _backendStderrSub;
   bool _backendLogEnabled = false;
@@ -249,9 +319,10 @@ class WebSocketService extends ChangeNotifier {
   bool get llmEnabled => _llmEnabled;
   bool get clipboardEnabled => _clipboardEnabled;
   bool get followModeEnabled => _followModeEnabled;
+  bool get autoFollowLunaEnabled =>
+      _followModeEnabled && _resourceConfig.lunaWsEnabled;
   bool get grammarAutoLearnEnabled => _grammarAutoLearnEnabled;
   bool get deepAutoAnalyzeEnabled => _deepAutoAnalyzeEnabled;
-  bool get autoStartBackend => _autoStartBackend;
   int? get managedBackendPid => _managedBackendPid;
   int? get managedBackendPort => _managedBackendPort;
   String? get managedBackendError => _managedBackendError;
@@ -295,7 +366,7 @@ class WebSocketService extends ChangeNotifier {
       return;
     }
 
-    if (_autoStartBackend && _isLocalBackendTarget(_serverUrl)) {
+    if (_shouldAutoManageBackend()) {
       await _startManagedBackendIfNeeded(force: true);
       if (!_shouldReconnect) {
         return;
@@ -359,7 +430,7 @@ class WebSocketService extends ChangeNotifier {
     if (_managedBackendPid != null) {
       unawaited(_checkManagedBackendAliveAndReport());
     }
-    if (_shouldReconnect) {
+    if (_shouldReconnect && _shouldAutoManageBackend()) {
       unawaited(_startManagedBackendIfNeeded());
     }
     _scheduleReconnect(token);
@@ -398,7 +469,9 @@ class WebSocketService extends ChangeNotifier {
   }
 
   /// Send text for analysis via WebSocket.
-  void sendText(String text) {
+  ///
+  /// `force=true` bypasses backend cache and recomputes with latest rules.
+  void sendText(String text, {bool force = false}) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
     if (_channel == null) {
@@ -407,7 +480,8 @@ class WebSocketService extends ChangeNotifier {
     }
 
     try {
-      _channel!.sink.add(jsonEncode({'type': 'analyze', 'text': trimmed}));
+      _channel!.sink.add(
+          jsonEncode({'type': 'analyze', 'text': trimmed, 'force': force}));
       // Optimistic preview avoids a blank result panel while waiting for backend.
       _state = AnalysisState(
         basic: BasicResult(text: trimmed),
@@ -480,6 +554,19 @@ class WebSocketService extends ChangeNotifier {
     return true;
   }
 
+  Future<bool> setAutoFollowLunaEnabled(bool enabled) async {
+    final followOk = await setFollowModeEnabled(enabled);
+    final lunaOk = await setLunaWsEnabled(enabled);
+    if (!followOk || !lunaOk) {
+      await Future.wait([
+        refreshFollowModeStatus(),
+        refreshResourceConfig(),
+      ]);
+      return false;
+    }
+    return true;
+  }
+
   Future<void> refreshGrammarAutoLearnStatus() async {
     final data = await _requestJson('GET', '/api/grammar/auto-learn/status');
     if (data == null) return;
@@ -538,6 +625,34 @@ class WebSocketService extends ChangeNotifier {
     _resourceConfig = config;
     notifyListeners();
     return config;
+  }
+
+  Future<GinzaRuntimeStatus?> getGinzaStatus() async {
+    final data = await _requestJson('GET', '/api/ginza/status');
+    if (data == null) return null;
+    return GinzaRuntimeStatus.fromJson(data);
+  }
+
+  Future<GinzaPackageStatus?> getGinzaPackageStatus({
+    String packageName = 'ja_ginza_electra',
+  }) async {
+    final path =
+        '/api/ginza/package-status/${Uri.encodeComponent(packageName)}';
+    final data = await _requestJson('GET', path);
+    if (data == null) return null;
+    return GinzaPackageStatus.fromJson(data);
+  }
+
+  Future<GinzaInstallResult?> installGinzaPackage({
+    String packageName = 'ja_ginza_electra',
+  }) async {
+    final data = await _requestJson(
+      'POST',
+      '/api/ginza/install',
+      body: {'package_name': packageName},
+    );
+    if (data == null) return null;
+    return GinzaInstallResult.fromJson(data);
   }
 
   Future<bool> saveResourceConfig(ExternalResourceConfig config) async {
@@ -734,16 +849,50 @@ class WebSocketService extends ChangeNotifier {
     return data != null && data['status'] == 'ok';
   }
 
-  Future<void> clearHistory() async {
+  Future<bool> clearHistory() async {
+    var backendCleared = false;
+    final snapshotTexts = _history
+        .map((item) => item.text.trim())
+        .where((text) => text.isNotEmpty)
+        .toList();
+
+    final data = await _requestJson('POST', '/api/analysis/history/clear');
+    if (data != null && data['status'] == 'ok') {
+      backendCleared = true;
+    } else {
+      var successCount = 0;
+      for (final text in snapshotTexts) {
+        final row = await _requestJson(
+          'POST',
+          '/api/analysis/history/delete',
+          body: {'text': text},
+        );
+        if (row != null && row['status'] == 'ok') {
+          successCount += 1;
+        }
+      }
+      backendCleared = successCount == snapshotTexts.length;
+    }
+
     _history.clear();
     notifyListeners();
     await _saveHistoryToPrefs();
+    return backendCleared;
   }
 
-  Future<void> setAutoStartBackend(bool enabled) async {
-    _autoStartBackend = enabled;
-    notifyListeners();
-    await _saveBackendPrefs();
+  Future<bool> reconnect({
+    String? url,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    connect(url: url);
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      if (_connected) {
+        return true;
+      }
+      await Future.delayed(const Duration(milliseconds: 120));
+    }
+    return _connected;
   }
 
   Future<void> setBackendLogEnabled(bool enabled) async {
@@ -787,7 +936,6 @@ class WebSocketService extends ChangeNotifier {
     await _backendStderrSub?.cancel();
     _backendStdoutSub = null;
     _backendStderrSub = null;
-    _managedBackendProcess = null;
     _managedBackendPid = null;
     _managedBackendPort = null;
     _appendBackendLog('[frontend] managed backend stopped');
@@ -805,29 +953,21 @@ class WebSocketService extends ChangeNotifier {
       }
       _managedBackendPid = null;
       _managedBackendPort = null;
-      _managedBackendProcess = null;
     }
 
     final port = _preferredLocalBackendPort();
     final existingReady = await _checkBackendReady(port);
     if (existingReady) {
-      _managedBackendPid = null;
+      final existingPid = await _resolveListeningPidByPort(port);
+      _managedBackendPid = existingPid;
       _managedBackendPort = port;
       _managedBackendError = null;
       _serverUrl = _localWsUrl(port);
+      final pidSuffix = existingPid == null ? '' : ' (pid=$existingPid)';
       _appendBackendLog(
-          '[frontend] reuse running backend at ${_localWsUrl(port)}');
+          '[frontend] reuse running backend at ${_localWsUrl(port)}$pidSuffix');
       notifyListeners();
       return true;
-    }
-
-    final exePath = _resolveBackendExecutablePath();
-    if (exePath == null || exePath.isEmpty) {
-      _reportBackendWarning(
-        '未找到后端可执行文件，已切换为直连模式（调试阶段请启动源码后端）',
-      );
-      debugPrint('Managed backend start skipped: executable not found');
-      return false;
     }
 
     _startingManagedBackend = true;
@@ -840,9 +980,26 @@ class WebSocketService extends ChangeNotifier {
         return false;
       }
 
-      final pid = await _launchBackendProcess(exePath, port);
+      int? pid;
+      final exePath = _resolveBackendExecutablePath();
+      if (exePath != null && exePath.isNotEmpty) {
+        pid = await _launchBackendProcess(exePath, port);
+      }
+
       if (pid == null) {
-        _reportBackendFailure('后端启动失败，无法拉起端口 $port');
+        final scriptPath = _resolveBackendScriptPath();
+        if (scriptPath != null && scriptPath.isNotEmpty) {
+          _appendBackendLog(
+            '[frontend] backend exe unavailable, fallback to python script: $scriptPath',
+          );
+          pid = await _launchBackendPythonProcess(scriptPath, port);
+        }
+      }
+
+      if (pid == null) {
+        _reportBackendFailure(
+          '后端启动失败：未找到可执行文件且Python回退也失败（端口 $port）',
+        );
         return false;
       }
 
@@ -896,6 +1053,10 @@ class WebSocketService extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  bool _shouldAutoManageBackend() {
+    return !kDebugMode && _isLocalBackendTarget(_serverUrl);
   }
 
   String _localWsUrl(int port) => 'ws://127.0.0.1:$port/ws';
@@ -960,7 +1121,6 @@ class WebSocketService extends ChangeNotifier {
         environment: environment,
       );
 
-      _managedBackendProcess = process;
       await _backendStdoutSub?.cancel();
       await _backendStderrSub?.cancel();
       _backendStdoutSub = process.stdout
@@ -984,6 +1144,72 @@ class WebSocketService extends ChangeNotifier {
           '[frontend] backend launch exception on port $port: $e');
       return null;
     }
+  }
+
+  Future<int?> _launchBackendPythonProcess(String scriptPath, int port) async {
+    final scriptFile = File(scriptPath);
+    if (!scriptFile.existsSync()) {
+      return null;
+    }
+
+    final backendDir = scriptFile.parent;
+    final projectRoot = backendDir.parent;
+
+    final pythonCandidates = <String>[
+      '${backendDir.path}\\.venv\\Scripts\\python.exe',
+      '${projectRoot.path}\\.venv\\Scripts\\python.exe',
+      'python',
+      'py',
+    ];
+
+    for (final candidate in pythonCandidates) {
+      final usePyLauncher =
+          candidate.toLowerCase().endsWith('\\py.exe') || candidate == 'py';
+      final args = usePyLauncher
+          ? <String>['-3', '-u', scriptPath]
+          : <String>['-u', scriptPath];
+
+      try {
+        _appendBackendLog(
+          '[frontend] launching backend python: $candidate ${args.join(' ')}',
+        );
+
+        final process = await Process.start(
+          candidate,
+          args,
+          workingDirectory: backendDir.path,
+          mode: ProcessStartMode.normal,
+          runInShell: false,
+          environment: _buildBackendEnvironment(port),
+        );
+
+        await _backendStdoutSub?.cancel();
+        await _backendStderrSub?.cancel();
+        _backendStdoutSub = process.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .listen((line) => _appendBackendLog('[stdout] $line'));
+        _backendStderrSub = process.stderr
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .listen((line) => _appendBackendLog('[stderr] $line'));
+
+        unawaited(() async {
+          final exitCode = await process.exitCode;
+          _appendBackendLog(
+              '[frontend] backend process exited (pid=${process.pid}, code=$exitCode)');
+        }());
+
+        return process.pid;
+      } catch (e) {
+        _appendBackendLog(
+          '[frontend] python candidate failed: $candidate ($e)',
+        );
+        continue;
+      }
+    }
+
+    return null;
   }
 
   Future<bool> _waitBackendReady(
@@ -1047,12 +1273,51 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
-  Future<void> _killProcess(int pid) async {
-    try {
-      await Process.run('taskkill', ['/PID', '$pid', '/T', '/F']);
-    } catch (_) {
-      // Ignore cleanup failures.
+  Future<int?> _resolveListeningPidByPort(int port) async {
+    if (kIsWeb || !Platform.isWindows) {
+      return null;
     }
+
+    try {
+      final result = await Process.run('netstat', ['-ano', '-p', 'tcp']);
+      if (result.exitCode != 0) {
+        return null;
+      }
+
+      final output = (result.stdout ?? '').toString();
+      final lines = const LineSplitter().convert(output);
+      for (final line in lines) {
+        final text = line.trim();
+        if (!text.toUpperCase().startsWith('TCP')) {
+          continue;
+        }
+
+        final parts = text.split(RegExp(r'\s+'));
+        if (parts.length < 5) {
+          continue;
+        }
+
+        final localAddress = parts[1];
+        final state = parts[3].toUpperCase();
+        final pidRaw = parts[4];
+
+        if (!localAddress.endsWith(':$port')) {
+          continue;
+        }
+        if (state != 'LISTENING') {
+          continue;
+        }
+
+        final pid = int.tryParse(pidRaw);
+        if (pid != null && pid > 0) {
+          return pid;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
   }
 
   Map<String, String> _buildBackendEnvironment(int port) {
@@ -1080,6 +1345,34 @@ class WebSocketService extends ChangeNotifier {
         '$root\\resources\\backend\\jp_backend.exe',
         '$root\\resources\\backend\\main.dist\\jp_backend.exe',
         '$root\\build\\nuitka\\main.dist\\jp_backend.exe',
+      ]);
+    }
+
+    for (final path in candidates) {
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+
+    return null;
+  }
+
+  String? _resolveBackendScriptPath() {
+    if (kIsWeb || !Platform.isWindows) {
+      return null;
+    }
+
+    final roots = <String>{};
+    roots.addAll(_collectAncestorRoots(Directory.current.path));
+    roots.addAll(
+      _collectAncestorRoots(File(Platform.resolvedExecutable).parent.path),
+    );
+
+    final candidates = <String>[];
+    for (final root in roots) {
+      candidates.addAll([
+        '$root\\backend\\main.py',
+        '$root\\resources\\backend\\main.py',
       ]);
     }
 
@@ -1133,8 +1426,12 @@ class WebSocketService extends ChangeNotifier {
     try {
       final request = await client.openUrl(method, _apiUri(path));
       if (body != null) {
-        request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-        request.write(jsonEncode(body));
+        request.headers.set(
+          HttpHeaders.contentTypeHeader,
+          'application/json; charset=utf-8',
+        );
+        final payload = jsonEncode(body);
+        request.add(utf8.encode(payload));
       }
 
       final response = await request.close();
@@ -1232,8 +1529,6 @@ class WebSocketService extends ChangeNotifier {
   Future<void> _loadHistoryFromPrefs() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      _autoStartBackend =
-          prefs.getBool(_backendAutoStartStorageKey) ?? _autoStartBackend;
       _backendLogEnabled =
           prefs.getBool(_backendLogEnabledStorageKey) ?? _backendLogEnabled;
 
@@ -1242,6 +1537,8 @@ class WebSocketService extends ChangeNotifier {
           .toLowerCase();
       if (_windowEffectValues.contains(effect)) {
         _windowEffect = effect;
+      } else if (effect == 'disabled') {
+        _windowEffect = 'transparent';
       }
 
       final limit =
@@ -1283,15 +1580,6 @@ class WebSocketService extends ChangeNotifier {
       await prefs.setStringList(_historyStorageKey, list);
     } catch (e) {
       debugPrint('Save local history failed: $e');
-    }
-  }
-
-  Future<void> _saveBackendPrefs() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_backendAutoStartStorageKey, _autoStartBackend);
-    } catch (e) {
-      debugPrint('Save backend prefs failed: $e');
     }
   }
 
@@ -1356,6 +1644,15 @@ class WebSocketService extends ChangeNotifier {
 
   @override
   void dispose() {
+    final pid = _managedBackendPid;
+    if (!kIsWeb && Platform.isWindows && pid != null) {
+      try {
+        Process.runSync('taskkill', ['/PID', '$pid', '/T', '/F']);
+      } catch (_) {
+        // Ignore shutdown failures during app exit.
+      }
+    }
+
     unawaited(_backendStdoutSub?.cancel());
     unawaited(_backendStderrSub?.cancel());
     unawaited(stopManagedBackendNow());

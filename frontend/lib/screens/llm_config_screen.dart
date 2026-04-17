@@ -197,15 +197,10 @@ class _LlmConfigScreenState extends State<LlmConfigScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  const Text(
-                    '一次配置，持久保存到本地数据库（SQLite），重启后自动生效。',
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                  const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
                     initialValue: _backend,
                     decoration: const InputDecoration(
-                      labelText: '后端类型',
+                      labelText: '模式切换',
                       border: OutlineInputBorder(),
                     ),
                     items: const [
@@ -228,6 +223,31 @@ class _LlmConfigScreenState extends State<LlmConfigScreen> {
                         unawaited(_fetchModels(silent: true));
                       }
                     },
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white24),
+                      color: Colors.white10,
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('模式说明',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                        SizedBox(height: 6),
+                        Text(
+                            '自动检测：只会优先尝试 Ollama；若 Ollama 不可用则关闭深度分析，不会自动切到 API。'),
+                        SizedBox(height: 4),
+                        Text('关闭深度分析：仅使用基础解析，不请求 LLM。'),
+                        SizedBox(height: 4),
+                        Text('Ollama 本地模型：固定使用本地 Ollama 服务与模型。'),
+                        SizedBox(height: 4),
+                        Text('通用 API：固定走 API 配置（OpenAI 兼容或 Anthropic）。'),
+                      ],
+                    ),
                   ),
                   if (_useApi || _useOllama) ...[
                     const SizedBox(height: 12),
